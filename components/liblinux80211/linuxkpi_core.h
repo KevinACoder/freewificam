@@ -41,14 +41,6 @@
  * function, so the contract header carries the interface's file verbatim. */
 #include <linux/compiler_attributes.h>
 
-/* [LNX] include/linux/compiler.h:5 includes <linux/compiler_types.h>: on a
- * kernel build that header is how the version-dependent attributes (the
- * "counted by" family a structure's flexible-array bound is annotated with)
- * reach every source. This port carries the always-there attributes above and
- * the version-dependent ones in their own face, included here so that a driver
- * header which names one compiles wherever it is reached from. */
-#include <linux/compiler_types.h>
-
 /* -std=c11 has no typeof keyword; the GNU spelling always exists. */
 #ifndef typeof
 #define	typeof(x)	__typeof__(x)
@@ -72,15 +64,6 @@ void get_random_bytes(void *buf, size_t len);
 #endif
 #ifndef IS_BUILTIN
 #define	IS_BUILTIN(option)	__is_defined(option)
-#endif
-/* [LNX] include/linux/kconfig.h: the third arm, a CONFIG symbol defined as
- * `_MODULE`. A driver asks it to tell "built in" from "loadable": brcmfmac's
- * fwvid.c only requests the per-vendor module when its own CONFIG is a module.
- * This image is one built-in driver (driver_config.h defines CONFIG_BRCMFMAC and
- * never CONFIG_BRCMFMAC_MODULE), so the answer is 0 and the module arm stays
- * closed. */
-#ifndef IS_MODULE
-#define	IS_MODULE(option)	__is_defined(option##_MODULE)
 #endif
 
 /* the drivers are one module here; KBUILD_MODNAME shows up in ids */
@@ -152,9 +135,6 @@ typedef uint16_t		__sum16;
 typedef uint32_t		__wsum;
 
 typedef unsigned long		ulong;
-/* [LNX] include/linux/types.h: the two legacy spellings the kernel keeps for
- * old drivers. brcmfmac names both (sdio.h's block counters are `ushort`). */
-typedef unsigned short		ushort;
 typedef unsigned int		uint;
 typedef int64_t			loff_t;
 /*
@@ -413,23 +393,8 @@ struct device {
 	struct bus_type	*bus;
 };
 
-/* [LNX] include/linux/device.h: the driver-private pointer pair. The interface
- * states them as inline functions taking `struct device *` (dev_get_drvdata
- * takes a const one), so a caller may hand a `void *` - which is what
- * brcmfmac's interrupt handler does with its dev_id - and the parameter type
- * does the conversion. A macro would have the caller's expression dereferenced
- * as written, which a void pointer cannot be. */
-static __always_inline void
-dev_set_drvdata(struct device *dev, void *data)
-{
-	dev->driver_data = data;
-}
-
-static __always_inline void *
-dev_get_drvdata(const struct device *dev)
-{
-	return dev->driver_data;
-}
+#define	dev_set_drvdata(dev, data)	do { (dev)->driver_data = (data); } while (0)
+#define	dev_get_drvdata(dev)		((dev)->driver_data)
 
 /* ------------------------------------------------------------------ */
 /* constants and small helpers                                         */
@@ -3072,7 +3037,6 @@ void lkpi_skb_queue_reset(struct sk_buff_head *);
 void lkpi_skb_queue_tail(struct sk_buff_head *, struct sk_buff *);
 void lkpi_skb_queue_head(struct sk_buff_head *, struct sk_buff *);
 struct sk_buff *lkpi_skb_dequeue(struct sk_buff_head *);
-struct sk_buff *lkpi_skb_dequeue_tail(struct sk_buff_head *);
 void lkpi_skb_unlink(struct sk_buff *, struct sk_buff_head *);
 void lkpi_skb_queue_purge(struct sk_buff_head *);
 /* raw surgery: the __skb_* contract - caller holds q->lock or owns the
@@ -3115,90 +3079,22 @@ lkpi_alloc_skb_min(unsigned int size, unsigned int gfp)
 /* the __ variants are the raw contract: caller holds q->lock or owns
  * the queue (Linux semantics - rtw89 fw.c c2h, rtw88 usb.c aggregation) */
 #define	__skb_queue_tail(q, skb)	lkpi_skb_do_queue_tail((q), (skb))
-/*
- * [LNX] include/linux/skbuff.h:2215-2230: `skb_peek_next()` - the frame after @skb,
- * or NULL at the end. The interface's body is exactly this test against the head
- * sentinel, and the reference it returns is volatile (no refcount is taken), which is
- * the contract the caller already lives under.
- */
-static __always_inline struct sk_buff *
-skb_peek_next(struct sk_buff *skb, const struct sk_buff_head *list_)
-{
-	struct sk_buff *next = skb->next;
-
-	if (next == (struct sk_buff *)list_)
-		next = NULL;
-	return next;
-}
-
-/* [LNX] include/linux/skbuff.h:2322-2334,2414-2429: the unlocked middle-of-list
- * insertions. The __ contract is the interface's - the caller holds the queue lock
- * or owns the queue - and the body keeps this port's ownership bookkeeping (the
- * frame's `_queue` and the queue's counter) so a frame spliced in mid-list is
- * owned exactly like one queued at either end.
- *   __skb_queue_after(list, prev, newsk): queue newsk right after prev
- *   __skb_insert(newsk, prev, next, list): the general form */
-void lkpi_skb_do_insert(struct sk_buff_head *, struct sk_buff *,
-			struct sk_buff *, struct sk_buff *);
-#define	__skb_insert(newsk, prev, next, q)				\
-	lkpi_skb_do_insert((q), (newsk), (prev), (next))
-#define	__skb_queue_after(q, prev, newsk)				\
-	lkpi_skb_do_insert((q), (newsk), (prev), (prev)->next)
 #define	skb_queue_head(q, skb)		lkpi_skb_queue_head((q), (skb))
 #define	__skb_queue_head(q, skb)	lkpi_skb_do_queue_head((q), (skb))
 #define	skb_dequeue(q)			lkpi_skb_dequeue(q)
-/* the tail pop: same locked contract as skb_dequeue, from the other end
- * (brcmfmac's priority queue takes frames off the tail for its flow
- * control) */
-#define	skb_dequeue_tail(q)		lkpi_skb_dequeue_tail(q)
-
-/* [LNX] include/linux/skbuff.h: `skb_queue_is_first`/`skb_queue_is_last`: the two
- * end tests, over the head sentinel the queue's own head is. */
-#define	skb_queue_is_first(list, skb)	((skb)->prev == (struct sk_buff *)(list))
-#define	skb_queue_is_last(list, skb)	((skb)->next == (struct sk_buff *)(list))
-
-/*
- * [LNX] include/linux/skbuff.h:1988-2003: the frame before @skb in @list. The
- * interface states the precondition with a BUG_ON - the first frame's prev is the
- * queue head, which is not a frame - and this port's BUG_ON parks, like the
- * interface's. The one caller (brcmfmac's flow-control insertion, fwsignal.c:1280)
- * stops its walk when the tail meets the head, so it never asks for the first
- * frame's predecessor.
- */
-static __always_inline struct sk_buff *
-skb_queue_prev(const struct sk_buff_head *list, const struct sk_buff *skb)
-{
-	BUG_ON(skb_queue_is_first(list, skb));
-	return skb->prev;
-}
 #define	__skb_dequeue(q)		lkpi_skb_do_dequeue(q)
 #define	skb_unlink(skb, q)		lkpi_skb_unlink((skb), (q))
 #define	__skb_unlink(skb, q)		lkpi_skb_do_unlink((skb), (q))
 #define	skb_queue_purge(q)		lkpi_skb_queue_purge(q)
 
-/*
- * [LNX] include/linux/skbuff.h:3360-3365: the interface has two spellings for
- * shrinking a buffer: __skb_trim() sets the length, and skb_trim() is the wrapper
- * that checks first. The port had only the wrapper's body; it is restated over
- * the lower-level name so a caller that names __skb_trim() (brcmfmac's SDIO
- * frame alignment, sdio.c:673) reaches the same linear-buffer answer: this port
- * has no fragment list to drop, so setting len and the tail pointer is the whole
- * operation.
- */
+/* skb_trim: shrink len (linear skbs only on this image) */
 static __always_inline __unused void
-__skb_trim(struct sk_buff *skb, unsigned int len)
+skb_trim(struct sk_buff *skb, unsigned int len)
 {
 	if (skb->len > len) {
 		skb->len = len;
 		skb->tail = (unsigned int)(skb->data - skb->head) + len;
 	}
-}
-
-/* skb_trim: the checking wrapper (linear skbs only on this image) */
-static __always_inline __unused void
-skb_trim(struct sk_buff *skb, unsigned int len)
-{
-	__skb_trim(skb, len);
 }
 
 /* pskb_expand_head: the linear pool can grow a buffer by allocating a new
@@ -3645,17 +3541,7 @@ typedef u64 netdev_features_t;
 /* [LNX] lib/vsprintf.c: the unbounded scan sysfs/nl80211 parse paths use. */
 int sscanf(const char *buf, const char *fmt, ...);
 
-/* [LNX] include/linux/random.h:40-41: the 8- and 16-bit draws, stated over the
- * same byte source as the 32-bit one above. brcmfmac draws an 8-bit value to pick
- * a randomized PNO scan interval (pno.c:180). */
-static __always_inline __unused u8 get_random_u8(void)
-{
-	u8 v;
-
-	get_random_bytes(&v, sizeof(v));
-	return v;
-}
-
+/* [LNX] include/linux/random.h: the 16-bit draw. */
 static __always_inline __unused u16 get_random_u16(void)
 {
 	u16 v;
@@ -3850,18 +3736,6 @@ void complete_all(struct completion *c);
 #define	wait_for_completion_timeout(c, j)	lkpi_wait_for_completion_timeout((c), (j))
 #define	wait_for_completion_interruptible_timeout(c, j) \
 	lkpi_wait_for_completion_timeout((c), (j))
-/* [LNX] include/linux/completion.h: the interruptible wait. The interface's answer is
- * 0 when the completion fired and -ERESTARTSYS when a pending signal ended the wait
- * first. This port delivers no signals (see send_sig in linux/sched/signal.h), so only
- * the completion can end the wait and the answer is always 0 - which is the same body
- * the interface's callers take on the normal path. brcmfmac's SDIO watchdog thread
- * waits here for its poll interval (sdio.c:4111). */
-static __always_inline __unused int
-wait_for_completion_interruptible(struct completion *c)
-{
-	lkpi_wait_for_completion(c);
-	return 0;
-}
 #define	try_wait_for_completion(c)		lkpi_try_wait_for_completion(c)
 #define	completion_done(c)			lkpi_completion_done(c)
 
@@ -4110,56 +3984,6 @@ struct lkpi_timer_stats {
 	/* which callbacks the refused arms belonged to (first four distinct) */
 	void		*fail_fn[4];
 	uint32_t	fail_fn_n[4];
-	/* Which timers never got an OS object at all (first four distinct
-	 * callbacks).  A timer whose creation failed is not "late": every
-	 * later arm on it is a no-op, so the stack step it drives - a scan
-	 * channel advance, a link timeout - simply never happens. */
-	void		*new_fail_fn[4];
-	uint32_t	new_fail_fn_n[4];
-	/* Where the refused creation was attempted from, and the CPU's interrupt
-	 * state at that moment.  The CMSIS adapter refuses to create a timer while
-	 * interrupts are masked (IRQ_Context() reports 1 for BASEPRI != 0 as well
-	 * as for an exception), so a caller that reaches timer_setup with a lock
-	 * held gets no timer at all - and every later arm on it is a no-op. */
-	void		*new_fail_ra[4];
-	uint32_t	new_fail_ra_n[4];
-	uint32_t	new_fail_primask;
-	uint32_t	new_fail_basepri;
-	uint32_t	new_fail_ipsr;
-	/* Which callbacks actually fired, so "the timer is armed and running"
-	 * and "the timer never existed" are two different readings. */
-	void		*fire_fn[6];
-	uint32_t	fire_fn_n[6];
-	/* Which timer *objects* fired, and how often.  The vendored driver routes
-	 * every one of its timers through one wrapper callback (`timer_hdl`), so
-	 * `fire_fn` cannot tell the survey timer from the link timer - and "did
-	 * the survey's step fire at all" is exactly the question a stalled scan
-	 * turns on.  The object address is compared with the driver's own
-	 * `survey_timer_addr` / `link_timer_addr` (obs.c). */
-	void		*fire_timer[6];
-	uint32_t	fire_timer_n[6];
-	/* Per-object arm count, the third side of the same ledger: arms vs fires
-	 * vs refusals names all three shapes at once - an object armed twice and
-	 * fired once is "the second arm was taken and never delivered" (the timer
-	 * service), while an object armed once, fired once and refused zero times
-	 * is "the caller stopped arming it". */
-	void		*arm_timer[6];
-	uint32_t	arm_timer_n[6];
-	/* The refused arm's identity, the same way new_fail names a refused
-	 * creation: the timer object (so a caller can say *which* timer - a
-	 * survey step, a link timeout - lost its step), the caller, and the
-	 * CPU's interrupt state at that instant.  mod_timer runs from task
-	 * context on this port, so an IPSR/BASEPRI read here separates "the
-	 * CMSIS adapter saw a masked section and refused" from "the timer
-	 * service queue was full" - two mechanisms with the same visible
-	 * outcome (a step that never happens) and different fixes. */
-	void		*mod_fail_timer[4];
-	uint32_t	mod_fail_timer_n[4];
-	void		*mod_fail_ra[4];
-	uint32_t	mod_fail_ra_n[4];
-	uint32_t	mod_fail_primask;
-	uint32_t	mod_fail_basepri;
-	uint32_t	mod_fail_ipsr;
 };
 
 void lkpi_timer_stats_get(struct lkpi_timer_stats *out);
@@ -4173,14 +3997,6 @@ int lkpi_timer_selftest(void);
 #define	timer_setup(t, fn, flags)	lkpi_timer_setup((t), (fn))
 #define	setup_timer(t, fn, arg)		lkpi_timer_setup((t), (fn))
 #define	mod_timer(t, expires)		lkpi_mod_timer((t), (expires))
-/* [LNX] include/linux/timer.h: `void add_timer(struct timer_list *timer)` - arm a
- * timer that is not pending, with the expiry already stored in timer->expires. It is
- * the interface's separate name for the same arming operation mod_timer() performs
- * (the interface's __mod_timer with MOD_TIMER_NOTPENDING), so the port's arming entry
- * point is the body. brcmfmac arms its SDIO watchdog this way the first time and
- * re-arms with mod_timer() afterwards (sdio.c:4641-4646), which is exactly the split
- * the two names describe. */
-#define	add_timer(t)			lkpi_mod_timer((t), (t)->expires)
 #define	del_timer(t)			lkpi_del_timer(t)
 #define	del_timer_sync(t)		lkpi_del_timer_sync(t)
 #define	timer_pending(t)		lkpi_timer_pending(t)
@@ -4210,12 +4026,6 @@ struct wait_queue_head {
 typedef struct wait_queue_head wait_queue_head_t;
 
 void lkpi_waitqueue_init(struct wait_queue_head *wq);
-/* [LNX] include/linux/wait.h: `waitqueue_active(wq_head)` - the lockless "does
- * anything wait here" test. The interface reads the head's entry list; this port's
- * head is a condition shell with no entry list, so the answer is the shell's own
- * waiter count (the tasks parked in lkpi_waitq_timedwait), which is the same
- * question asked of the structure that exists. Body: linuxkpi_core.c. */
-int lkpi_waitqueue_active(struct wait_queue_head *wq);
 void lkpi_waitqueue_wake(struct wait_queue_head *);
 void lkpi_waitq_lock(struct wait_queue_head *);
 void lkpi_waitq_unlock(struct wait_queue_head *);
@@ -4225,7 +4035,6 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 #define	wake_up(wq)			lkpi_waitqueue_wake(wq)
 #define	wake_up_interruptible(wq)	lkpi_waitqueue_wake(wq)
 #define	wake_up_all(wq)			lkpi_waitqueue_wake(wq)
-#define	waitqueue_active(wq)		lkpi_waitqueue_active(wq)
 
 /*
  * Returns 1 when the condition became true, 0 on timeout - the interface's
@@ -4267,32 +4076,6 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 			(void)lkpi_waitq_timedwait(&(wq), 1000);	\
 		lkpi_waitq_unlock(&(wq));				\
 	} while (0)
-
-/*
- * [LNX] include/linux/wait.h: the interruptible timed wait. The interface differs
- * from wait_event_timeout() only in what can end the wait early: a pending signal
- * also breaks the loop, and the answer is then the remaining timeout instead of 0.
- * This port delivers no signals to a task (see send_sig in linux/sched/signal.h), so
- * the early-exit arm cannot be taken and the wait is the same deadline loop as
- * wait_event_timeout(): 1 when the condition became true, 0 on timeout. brcmfmac's
- * SDIO receive-thread wake uses it (sdio.c:2954).
- */
-#define	wait_event_interruptible_timeout(wq, cond, timeout)		\
-({									\
-	int __ms = (int)jiffies_to_msecs(timeout);			\
-	unsigned long __deadline = jiffies + (unsigned long)__ms;	\
-	int __ret;							\
-	lkpi_waitq_lock(&(wq));						\
-	while (!(cond)) {						\
-		long __left = (long)(__deadline - jiffies);		\
-		if (__left <= 0 ||					\
-		    !lkpi_waitq_timedwait(&(wq), (int)__left))		\
-			break;						\
-	}								\
-	__ret = (cond) ? 1 : 0;						\
-	lkpi_waitq_unlock(&(wq));					\
-	__ret;								\
-})
 
 /* ------------------------------------------------------------------ */
 /* usb_anchor (urb.c:812 family; rtl8xxxu embeds three in its softc;    */
@@ -4379,22 +4162,9 @@ int lkpi_strcasecmp(const char *, const char *);
 char *lkpi_strnstr(const char *, const char *, size_t);
 unsigned long simple_strtoul(const char *, char **, unsigned int base);
 int kstrtou8(const char *s, unsigned int base, u8 *res);
-/* [LNX] include/linux/kstrtox.h:30-40: the unsigned-long conversion the cfg80211
- * iovar-string parsers use (brcmfmac's country-code tables, cfg80211.c:8052). The
- * interface's body picks the word-width form; this port states the one 32-bit
- * target's answer with the interface's error contract (-EINVAL for a bad digit,
- * -ERANGE for overflow). Body: linuxkpi_compat.c. */
-int kstrtoul(const char *s, unsigned int base, unsigned long *res);
 int kstrtou16(const char *s, unsigned int base, u16 *res);
 int kstrtouint(const char *s, unsigned int base, unsigned int *res);
 int kstrtobool(const char *s, bool *res);
-/* [LNX] include/linux/kstrtox.h:111: the debugfs "write a number" form. It copies the
- * caller's buffer into a local string and then parses it, which is the interface's own
- * body; on this port the copy is the single-address-space copy_from_user of
- * asm/uaccess.h, so the caller's bytes are the ones parsed. Body:
- * linuxkpi_compat.c. */
-int kstrtou8_from_user(const char __user *s, size_t count, unsigned int base,
-		       u8 *res);
 
 
 /* ------------------------------------------------------------------ */

@@ -20,11 +20,6 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/ipv6.h>
-/* [LNX] include/net/ipv6.h includes <net/sock.h>: the IPv6 helpers are written over
- * the socket record, and on a kernel build this header is how a unit that takes it
- * reaches the sock vocabulary (brcmfmac's core.c calls sk_pacing_shift_update()
- * through net/ipv6.h, core.c:366). */
-#include <net/sock.h>
 
 /* [LNX] include/net/ipv6.h:43 */
 #define	NEXTHDR_NONE		59	/* No next header */

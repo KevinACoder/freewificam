@@ -84,24 +84,3 @@ and `--check` verifies both the source hashes and the emitted text.
 The licence texts are tracked copies rather than references: each licence's
 redistribution condition is that the notice travels with the binary, and a
 clean clone has no other copy of it.
-
-## The BCM43362 / AP6181 (2026-11-19)
-
-| | BCM43362 firmware | BCM43362 NVRAM |
-|---|---|---|
-| File | `brcm/brcmfmac43362-sdio.bin` | `brcm/brcmfmac43362-sdio.txt` |
-| Request name | `brcm/brcmfmac43362-sdio.bin` | `brcm/brcmfmac43362-sdio.txt` |
-| Size | 202,623 bytes | 803 bytes |
-| SHA-256 | `24e9c2eb18628f855e8d9453cdef2cf66ba06ee0dcfa9c664adce144e7ca2c5f` | `c17e2913e43c6420a3bfb63d34b5572e60ab038fcb5bc6b401c4200c56c12597` |
-| Source | linux-firmware `cypress/cyfmac43362-sdio.bin` (the `brcm/brcmfmac43362-sdio.bin` name is a symlink to it) | linux-firmware `brcm/brcmfmac43362-sdio.cubietech,cubietruck.txt`, the Ampak AP6210 board file |
-| Modification | none | none; renamed to the generic request name |
-| License | Broadcom binary redistribution terms, `LICENCE.broadcom_bcm43xx` beside this file | GPL-2.0+ (the file's own SPDX header), notice in `LICENCE.ap6210_nvram` |
-| Generated unit | `brcmfmac43362_fw_blob.c`, `lkpi_fw_brcmfmac43362_fw_register()` | `brcmfmac43362_nvram_blob.c`, `lkpi_fw_brcmfmac43362_nvram_register()` |
-
-The firmware request is not optional in brcmfmac: only the CLM item carries
-`BRCMF_FW_REQF_OPTIONAL`, so the image must answer both names or the probe
-stops before the chip is touched.  The NVRAM here is the Ampak AP6210 board
-file, not the Challenger V2 module's own calibration; it is the first public
-redistributable file for the same chip and module vendor, and the RF gate will
-say whether it is good enough.  The module vendor's own NVRAM is EULA material
-and is not in this tree.

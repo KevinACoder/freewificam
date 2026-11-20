@@ -29,13 +29,6 @@
 __printf(2, 3) int sprintf(char *buf, const char *fmt, ...);
 __printf(2, 0) int vsprintf(char *buf, const char *fmt, va_list args);
 
-/* [LNX] include/linux/sprintf.h:17: the allocating formatter, `__malloc` and
- * `__printf`-checked. A driver uses it when the string it builds has no
- * compile-time size (brcmfmac builds a firmware path from the board and chip
- * names, firmware.c:638); the body is the port's heap over the component's
- * vsnprintf (linuxkpi_compat.c). */
-__printf(2, 3) __malloc char *kasprintf(gfp_t gfp, const char *fmt, ...);
-
 /* [LNX] include/linux/sprintf.h:21-22: the scan family the compiled set names (the
  * vendored debug parsers read a numeric argument with sscanf). Declared, not defined:
  * the binding is the port's. The format-checking attribute is the interface's __scanf

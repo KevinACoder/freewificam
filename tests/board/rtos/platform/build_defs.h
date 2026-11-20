@@ -83,22 +83,7 @@
  * SDIO world (the host port, the card service, the board's dwc_mmc), not to the
  * vendor driver's flag world.  The driver's own feature face lives beside it:
  * wireless-drivers/rtl8189fs/driver_config.h (force-included in that world). */
-#if CONFIG_BOARD_STM32F429_CHALLENGER
-/* The imported ST device header selects its part from this name.  It is a
- * header define rather than a command-line -D because the build's compile
- * filters drop -D words (the generated config is the one define channel). */
-#define STM32F429xx 1
-#endif
-
-#if (CONFIG_LIBLINUX80211_SDIO || defined(RTOS_CASE_F429_SD_CARD)) && \
-    CONFIG_BOARD_STM32F429_CHALLENGER
-/* The F429's SDIO peripheral, 24 MHz maximum (48 MHz source / (2 + 0)).  This
- * branch also serves the probe image, which has the SDIO stack but not the
- * vendor driver, and the SD card image, which drives the same controller
- * through the imported SD stack instead of the SDIO one. */
-#define SDMMC_PORT_SDIO_HOST_TYPE kSDMMCHOST_TYPE_STM32F4_SDIO
-#define SDMMC_PORT_CARD_CLOCK_HZ 24000000U
-#elif CONFIG_LIBLINUX80211_RTL8189FS
+#if CONFIG_LIBLINUX80211_RTL8189FS
 #define SDMMC_PORT_SDIO_HOST_TYPE kSDMMCHOST_TYPE_FDWMMC
 #endif
 
@@ -182,9 +167,7 @@
 #endif
 /* The 8189FTV line's own selection: the SDIO port group compiles the card
  * service's SDIO half, which the FSL wrapper gates on this name. */
-#if CONFIG_LIBLINUX80211_RTL8189FS || CONFIG_LIBLINUX80211_BRCMFMAC || \
-    defined(RTOS_CASE_F429_SDIO_PROBE) || \
-    defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
+#if CONFIG_LIBLINUX80211_RTL8189FS
 #define CONFIG_FSL_SDMMC_ENABLE_SDIO 1
 #endif
 

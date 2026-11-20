@@ -30,12 +30,6 @@ extern char *strsep(char **s, const char *ct);
  * names (the vendored parsing paths use it). */
 extern int strncasecmp(const char *s1, const char *s2, size_t n);
 
-/* [LNX] include/linux/string.h:282: `char *strreplace(char *str, char old, char new)`
- * - replace one character in place, returning the string's end pointer (the
- * interface's return is the walk's end, not the start). The body is the component's
- * (linuxkpi_compat.c), transcribed from the interface's own lib/string.c. */
-char *strreplace(char *str, char old, char new);
-
 /* [LNX] include/linux/string.h:390: the bounded copy that pads the tail, declared as
  * the interface declares it; its body belongs to the port's C library. */
 void memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,

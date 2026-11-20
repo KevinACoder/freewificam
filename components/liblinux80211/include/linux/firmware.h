@@ -49,19 +49,6 @@ int request_firmware_nowait(struct module *module, bool uevent, const char *name
 			    struct device *device, gfp_t gfp, void *context,
 			    void (*cont)(const struct firmware *fw, void *context));
 
-/*
- * [LNX] include/linux/firmware.h:101-104: the asynchronous lookup that also stays
- * silent when the blob is absent - the pair of "no uevent needed" and "no warning"
- * applied to request_firmware_nowait(). brcmfmac's board-firmware fallback uses it to
- * try each board name without a warning per miss (firmware.c:720). The body is the
- * registry's own asynchronous path with both flags false (fw_registry.c).
- */
-int firmware_request_nowait_nowarn(struct module *module, const char *name,
-				   struct device *device, gfp_t gfp,
-				   void *context,
-				   void (*cont)(const struct firmware *fw,
-						void *context));
-
 /* Release a description obtained from request_firmware(). */
 void release_firmware(const struct firmware *firmware);
 

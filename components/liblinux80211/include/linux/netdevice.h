@@ -56,12 +56,6 @@
 
 #include "../../linuxkpi_core.h"
 
-/* [LNX] include/linux/netdevice.h:26 includes <linux/delay.h>: the device core's
- * helpers delay in terms of the task API, and on a kernel build this header is one of
- * the paths by which cond_resched()/the schedule family reach a driver that names
- * only netdevice.h (brcmfmac's short-delay helper, cfg80211.c:4004). */
-#include <linux/delay.h>
-
 /* [LNX] include/linux/netdevice.h:34 includes <linux/rculist.h>; the RCU list
  * iterators (net/cfg80211's mlme path walks wdev_list with one) reach a unit
  * through this header, as they do on the interface. */
@@ -124,25 +118,10 @@ void dev_close(struct net_device *dev);
 void dev_set_rx_mode(struct net_device *dev);
 void netif_receive_skb_list(struct list_head *head);
 int dev_queue_xmit(struct sk_buff *skb);
-struct ethtool_ops;
 struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 				    unsigned char name_assign_type,
 				    void (*setup)(struct net_device *),
 				    unsigned int txqs, unsigned int rxqs);
-
-/* [LNX] include/linux/netdevice.h:5041-5042: the one-queue spelling every driver
- * that allocates its own netdev names; it is the multis spelling with one TX and
- * one RX queue. */
-#define	alloc_netdev(sizeof_priv, name, name_assign_type, setup)	\
-	alloc_netdev_mqs((sizeof_priv), (name), (name_assign_type), (setup), 1, 1)
-
-/* [LNX] include/linux/netdevice.h:274-278: the multicast address list queries.
- * The list itself is the device's `mc` member and its count is the face's
- * netdev_hw_addr_list_count(), so the answer is the list's own bookkeeping. */
-#define	netdev_mc_count(dev)	netdev_hw_addr_list_count(&(dev)->mc)
-#define	netdev_mc_empty(dev)	netdev_hw_addr_list_empty(&(dev)->mc)
-#define	netdev_for_each_mc_addr(ha, dev)				\
-	netdev_hw_addr_list_for_each((ha), &(dev)->mc)
 
 /* [LNX] include/linux/netdevice.h: the device reference pair.  This port's
  * devices are static objects with image lifetime; dev_put() is the netdev
@@ -484,21 +463,6 @@ struct netdev_hw_addr_list {
  * interface's, and it is what keeps the driver's private area (allocated with the
  * device) aligned. Everything else is the named subset above.
  */
-/*
- * [LNX] include/linux/netdevice.h:1818-1825: the device's registration state. A
- * driver reads it to tell "registered" from "only allocated" before it decides how
- * to tear the device down (brcmfmac's core.c:689 unregisters only a registered
- * device and otherwise frees its own vif).
- */
-enum netdev_reg_state {
-	NETREG_UNINITIALIZED = 0,
-	NETREG_REGISTERED,	/* completed register_netdevice */
-	NETREG_UNREGISTERING,	/* called unregister_netdevice */
-	NETREG_UNREGISTERED,	/* completed unregister todo */
-	NETREG_RELEASED,	/* called free_netdev */
-	NETREG_DUMMY,		/* dummy device for NAPI poll */
-};
-
 struct net_device {
 	/* TX read-mostly hotpath */
 	unsigned long		priv_flags;
@@ -529,16 +493,8 @@ struct net_device {
 	unsigned int		min_mtu;
 	unsigned int		max_mtu;
 	netdev_features_t	hw_features;
-	/* [LNX] include/linux/netdevice.h: the driver's ethtool operation table; a
-	 * FullMAC driver installs its own before it registers the device
-	 * (brcmfmac's core.c:657). The ioctl path that walks it is not part of
-	 * this port's netdev face yet. */
-	const struct ethtool_ops *ethtool_ops;
 	const struct iw_handler_def *wireless_handlers;
 	struct net_device_stats	stats;
-	unsigned char		name_assign_type;	/* NET_NAME_* */
-	unsigned char		reg_state;		/* enum netdev_reg_state */
-	unsigned char		addr_assign_type;	/* NET_ADDR_* */
 	unsigned char		addr_len;
 	struct wireless_dev	*ieee80211_ptr;
 	const unsigned char	*dev_addr;
@@ -919,21 +875,10 @@ static inline void napi_synchronize(const struct napi_struct *n)
  * ((l)->count)`. The multicast-address count the driver reads before it walks the
  * list; carried as the interface's macro over the record's own counter. */
 #define	netdev_hw_addr_list_count(l)	((l)->count)
-#define	netdev_hw_addr_list_empty(l)	(list_empty(&(l)->list))
 
 #define	netdev_hw_addr_list_for_each(ha, l)	\
 	list_for_each_entry(ha, &(l)->list, list)
 
-
-/* [LNX] include/uapi/linux/netdevice.h:60-63, the hardware-address assignment
- * types dev->addr_assign_type carries: how the driver obtained the address it
- * programmed (permanent, random, stolen from another source, or explicitly set).
- * brcmfmac marks the interface RANDOM when the chip answers with its default
- * address and the driver replaces it. */
-#define	NET_ADDR_PERM		0	/* address is permanent (default) */
-#define	NET_ADDR_RANDOM		1	/* address is generated randomly */
-#define	NET_ADDR_STOLEN		2	/* address is stolen from another device */
-#define	NET_ADDR_SET		3	/* address was set explicitly */
 
 /* [LNX] include/linux/netdevice.h: the name-source tags dev_alloc_name() takes. */
 enum {

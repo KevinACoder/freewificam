@@ -35,17 +35,6 @@ debugfs_create_dir(const char *name, struct dentry *parent)
 }
 
 struct dentry *
-debugfs_create_file_full(const char *name, umode_t mode,
-    struct dentry *parent, void *data, const void *aux,
-    const struct file_operations *fops)
-{
-
-	(void)name; (void)mode; (void)parent; (void)data; (void)aux;
-	(void)fops;
-	return NULL;		/* no debugfs on a target image */
-}
-
-struct dentry *
 debugfs_create_file_short(const char *name, umode_t mode,
     struct dentry *parent, void *data, const void *aux,
     const struct debugfs_short_fops *fops)

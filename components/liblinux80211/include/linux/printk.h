@@ -44,20 +44,4 @@ void print_hex_dump(const char *level, const char *prefix_str, int prefix_type,
  */
 #define	printk(fmt, ...)	lkpi_printf(ULOG_INFO_LEVEL, fmt, ##__VA_ARGS__)
 
-/*
- * [LNX] include/linux/printk.h:469-475: `no_printk()`, the "compile the
- * arguments, print nothing" form. It is what a logging macro expands to when its
- * category is compiled out - the whole point is that the format arguments are
- * still parsed for warnings, so it must be a real call under `if (0)`, not an
- * empty expansion. brcmfmac's debug.h takes this arm for every category its
- * driver_config.h leaves unset (the file's `#ifdef CONFIG_BRCMDBG` blocks), so
- * the expression is reached by every TU. The value is the interface's 0.
- */
-#define	no_printk(fmt, ...)				\
-({							\
-	if (0)						\
-		printk(fmt, ##__VA_ARGS__);		\
-	0;						\
-})
-
 #endif /* _LINUXKPI_LINUX_PRINTK_H_ */

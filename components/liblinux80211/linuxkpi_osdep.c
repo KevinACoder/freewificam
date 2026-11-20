@@ -110,24 +110,6 @@ lkpi_kthread_of(struct task_struct *task)
 	return NULL;
 }
 
-/*
- * The CMSIS thread a task record stands for.  A kernel thread on this port is
- * two objects - the interface's `struct task_struct` (what the driver holds and
- * passes to kthread_stop) and the CMSIS thread that runs it - and the
- * observation seam needs the second one: only the CMSIS handle answers "is this
- * thread running, ready or blocked" and points at the saved stack frame.  The
- * identity is exact (the record is the table entry's first member), so a
- * pointer this file never handed out answers NULL rather than naming a
- * stranger's thread.
- */
-void *
-lkpi_kthread_cmsis_id(void *task)
-{
-	struct lkpi_kthread *k = lkpi_kthread_of((struct task_struct *)task);
-
-	return (k != NULL) ? (void *)k->id : NULL;
-}
-
 static struct lkpi_kthread *
 lkpi_kthread_by_thread(osThreadId_t id)
 {
@@ -245,38 +227,6 @@ kthread_stop(struct task_struct *k)
 	kt->id = NULL;
 	kt->used = 0;
 	return 0;
-}
-
-/*
- * [LNX] include/linux/kthread.h:108 (kernel/kthread.c): stop the thread and drop the
- * creation reference. This port's task objects live for the life of the image (see
- * linux/sched.h's get_task_struct), so there is no reference to drop and the call is
- * the stop alone - the same stop the interface's body performs first.
- */
-void
-kthread_stop_put(struct task_struct *k)
-{
-
-	if (k != NULL)
-		(void)kthread_stop(k);
-}
-
-/*
- * [LNX] include/linux/sched/signal.h:346: deliver a signal to a task. This port has
- * no signal delivery - a thread ends through its stop flag (kthread_stop), which is
- * what every teardown here uses - so the interface's "the signal could not be
- * queued" answer is the honest one. brcmfmac's SDIO watchdog teardown sends SIGTERM
- * and then calls kthread_stop_put() on the next line (sdio.c:2481-2482), so the stop
- * still happens; nothing about the teardown depends on the signal landing.
- */
-int
-send_sig(int sig, struct task_struct *p, int priv)
-{
-
-	(void)sig;
-	(void)p;
-	(void)priv;
-	return -EINVAL;
 }
 
 void
@@ -768,27 +718,3 @@ memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,
  * port has one namespace, so init_net is its single instance.
  */
 struct net init_net;
-
-/* ------------------------------------------------------------------ */
-/* module loading                                                      */
-/* ------------------------------------------------------------------ */
-
-/*
- * [LNX] include/linux/kmod.h:37 (kernel/kmod.c's __request_module): run the
- * module loader for a name and wait for it. brcmfmac names it once, in
- * fwvid.c:69, and only inside `#if IS_MODULE(CONFIG_BRCMFMAC)` - the arm that
- * loads the per-vendor backends as separate modules.
- *
- * This image is one built-in driver (driver_config.h defines CONFIG_BRCMFMAC and
- * never CONFIG_BRCMFMAC_MODULE), so the arm is closed and no compiled caller
- * reaches this body. It answers -ENOSYS rather than 0 because there is no module
- * loader on this port to have loaded anything: a future face that makes the
- * driver a module must not read "loaded" out of a load that never happened.
- */
-int
-__request_module(bool wait, const char *fmt, ...)
-{
-	(void)wait;
-	(void)fmt;
-	return -ENOSYS;
-}

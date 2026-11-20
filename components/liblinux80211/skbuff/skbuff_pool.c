@@ -1429,38 +1429,6 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	lkpi_txq_audit_op(skb, q, "q_tail");
 }
 
-/*
- * [LNX] include/linux/skbuff.h:2322-2334 (__skb_insert) and :2424-2429
- * (__skb_queue_after): splice a frame between two known neighbours. The __
- * contract is the interface's - no lock is taken here; the caller holds it or owns
- * the queue - and the shape is this port's: the frame's ownership (`_queue`) and
- * the queue's counter are updated the same way the tail/head forms do, so a frame
- * inserted mid-list is owned and audited exactly like one queued at an end. That
- * matters for brcmfmac's flow-control queue, which inserts by sequence number to
- * keep suppressed frames in transmit order (fwsignal.c:1294-1301).
- */
-void lkpi_skb_do_insert(struct sk_buff_head *q, struct sk_buff *skb,
-    struct sk_buff *prev, struct sk_buff *next)
-{
-	if (!queue_linkable(skb, q))
-		return;
-	if (lkpi_txq_audit_wt_link(skb, q, "q_insert", false)) {
-		/* the neighbours are not this queue's: splicing here would graft
-		 * the frame into a stranger's chain, so the queue is emptied and
-		 * rebuilt from its head, exactly as the tail form does */
-		lkpi_skb_queue_reset(q);
-		lkpi_skb_scrub_hit();
-	}
-	skb->prev = prev;
-	skb->next = next;
-	prev->next = skb;
-	next->prev = skb;
-	skb->_queue = q;
-	q->qlen++;
-	skbq_note_enq(q, skb, __builtin_return_address(0));
-	lkpi_txq_audit_op(skb, q, "q_insert");
-}
-
 void lkpi_skb_do_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *at;
@@ -1636,41 +1604,6 @@ struct sk_buff *lkpi_skb_dequeue(struct sk_buff_head *q)
 #endif
 
 	skb = lkpi_skb_do_dequeue(q);
-	lkpi_spin_unlock_irqrestore(&q->lock, flags);
-	return skb;
-}
-
-/*
- * [LNX] include/linux/skbuff.h: the tail pop (net/core/skbuff.c's
- * skb_dequeue_tail): the same locked contract as skb_dequeue, taking the last
- * frame instead of the first. brcmfmac's priority queue pops from the tail when
- * its flow control wants the oldest frame of a precedence (brcmutil/utils.c:130),
- * so this is a real transmit path, not a no-op.
- *
- * The emptiness test and the guard are the head pop's, for the same reason: the
- * chain is the truth and `qlen` is a cache that gets repaired to match, and the
- * frame is detached through do_detach() so its links are cleared and the audit
- * (when compiled in) sees the same operation the head path reports.
- */
-struct sk_buff *lkpi_skb_dequeue_tail(struct sk_buff_head *q)
-{
-	unsigned long long flags = lkpi_spin_lock_irqsave(&q->lock);
-	struct sk_buff *skb;
-#ifdef CONFIG_LKPI_SKBQ_DIAG
-	lkpi_skbq_note_ra(q, __builtin_return_address(0), 1);
-#endif
-
-	if (q->prev == NULL || q->prev == (struct sk_buff *)q) {
-		if (q->qlen != 0u) {
-			q->qlen = 0;
-			lkpi_skb_scrub_hit();
-		}
-		lkpi_spin_unlock_irqrestore(&q->lock, flags);
-		return NULL;
-	}
-	skb = q->prev;
-	do_detach(q, skb);
-	skbq_note_deq(q, __builtin_return_address(0));
 	lkpi_spin_unlock_irqrestore(&q->lock, flags);
 	return skb;
 }

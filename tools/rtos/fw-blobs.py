@@ -95,24 +95,6 @@ BLOBS: tuple[Blob, ...] = (
         licence="LICENCE.realtek_firmware",
         licence_note="Realtek binary redistribution terms",
     ),
-    Blob(
-        stem="brcmfmac43362_fw",
-        source="brcm/brcmfmac43362-sdio.bin",
-        request="brcm/brcmfmac43362-sdio.bin",
-        sha256="24e9c2eb18628f855e8d9453cdef2cf66ba06ee0dcfa9c664adce144e7ca2c5f",
-        brief="the BCM43362 brcmfmac driver asks for by name.",
-        licence="LICENCE.broadcom_bcm43xx",
-        licence_note="Broadcom binary redistribution terms",
-    ),
-    Blob(
-        stem="brcmfmac43362_nvram",
-        source="brcm/brcmfmac43362-sdio.txt",
-        request="brcm/brcmfmac43362-sdio.txt",
-        sha256="c17e2913e43c6420a3bfb63d34b5572e60ab038fcb5bc6b401c4200c56c12597",
-        brief="the BCM43362 brcmfmac driver asks for by name (Ampak AP6210 board file).",
-        licence="LICENCE.ap6210_nvram",
-        licence_note="GPL-2.0+ (linux-firmware Ampak AP6210 NVRAM)",
-    ),
 )
 
 

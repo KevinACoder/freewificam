@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 
-#include "swd_console.h"
 #include "uart.h"
 
 static uint32_t fault_msp(void)
@@ -49,24 +48,6 @@ static void fault_dump(const char *kind)
 	uart_early_puts(" xpsr=");
 	uart_early_put_hex32(frame[7]);
 	uart_early_puts("\n");
-
-	/* The same dump into the RAM ring: the serial link is the board's only
-	 * other console and it is the part most likely to be missing. */
-	swd_console_panic_puts("fatal: ");
-	swd_console_panic_puts(kind);
-	swd_console_panic_puts(" cfsr=");
-	swd_console_panic_hex(cfsr);
-	swd_console_panic_puts(" hfsr=");
-	swd_console_panic_hex(hfsr);
-	swd_console_panic_puts(" mmfar=");
-	swd_console_panic_hex(mmfar);
-	swd_console_panic_puts(" bfar=");
-	swd_console_panic_hex(bfar);
-	swd_console_panic_puts(" pc=");
-	swd_console_panic_hex(frame[6]);
-	swd_console_panic_puts(" lr=");
-	swd_console_panic_hex(frame[5]);
-	swd_console_panic_puts("\n");
 }
 
 #define FAULT_HANDLER(name, label) \
@@ -105,17 +86,6 @@ void DebugMon_Handler(void)
 __attribute__((weak)) void OTG_HS_IRQHandler(void)
 {
 	uart_early_panic("fatal: OTG_HS IRQ without USB glue\n");
-	for (;;) {
-		__asm__ __volatile__("wfe");
-	}
-}
-
-/* IRQ 49: the SDIO card interrupt (DAT1).  The first SDIO round polls the
- * card's own pending word, so a tick-only or polling image never enables the
- * line; the SDIO glue supplies the strong handler when it arms DAT1. */
-__attribute__((weak)) void SDIO_IRQHandler(void)
-{
-	uart_early_panic("fatal: SDIO IRQ without SDIO glue\n");
 	for (;;) {
 		__asm__ __volatile__("wfe");
 	}

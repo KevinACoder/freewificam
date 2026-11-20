@@ -24,14 +24,6 @@
 
 #include "../../linuxkpi_core.h"
 
-/* [LNX] include/linux/net.h: the interface reaches <linux/printk.h> through its
- * own includes (fs.h and mm.h both name it), which is how a driver header that
- * includes net.h gets printk() and no_printk() without naming them. This face
- * carries neither of those headers, so the include is stated here: brcmfmac's
- * debug.h includes net.h for net_ratelimit() and then expands brcmf_dbg() to
- * no_printk() in the same file. */
-#include <linux/printk.h>
-
 /* [LNX] include/linux/net.h:299-...: the socket record.  nl80211's WoWLAN TCP
  * trigger path reads `sock->sk`; the rest of the interface's record (state,
  * type, file, proto_ops) has no counterpart here and no compiled unit names

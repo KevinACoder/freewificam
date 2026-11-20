@@ -55,11 +55,6 @@ CASES = (
     # supplicant owns the join and the verdict is PASS STAW.
     "rtl8189fs_sta_wpa2",
     "rtl8189fs_throughput",
-    # The F429 SDIO probe: the card's identity before any function driver.
-    "f429_sdio_probe",
-    # The F429 TF-slot SD card line: the imported SD stack's geometry, the
-    # one-block read, and the tail-window write/readback/restore.
-    "f429_sd_card",
     # The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor's own AP MLME
     # beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
     # the station table is the vendor's (this image has no netlink socket).
@@ -167,14 +162,6 @@ PATTERNS = {
     "emmc_loop": re.compile(r"emmc: loop n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
     "emmc_badlba": re.compile(r"emmc: badlba lba=\d+ write_rc=(?P<w>-?\d+) read_rc=(?P<r>-?\d+) nohang=(?P<nohang>\w+)", re.MULTILINE),
     "emmc_pass": re.compile(r"emmc: PASS", re.MULTILINE),
-    # The F429 TF-slot SD card: geometry/mode, identity, one read, one
-    # write/readback and the restore, all from the case's own anchors.
-    "f429_sd_card_mode": re.compile(r"sdcard: cardsize blocks=(?P<blocks>\d+) block_size=(?P<bs>\d+) clock=(?P<clock>\d+) width=(?P<width>\d+) timing=(?P<timing>\d+) version=(?P<version>\d+) flags=0x(?P<flags>[0-9a-f]+)", re.MULTILINE),
-    "f429_sd_card_cid": re.compile(r"sdcard: cid manufacturer=0x(?P<mfg>[0-9a-f]+) oem=0x(?P<oem>[0-9a-f]+) product=(?P<product>\S*) rev=0x(?P<rev>[0-9a-f]+) serial=0x(?P<serial>[0-9a-f]+) date=0x(?P<date>[0-9a-f]+)", re.MULTILINE),
-    "f429_sd_card_rw": re.compile(r"sdcard: rw lba=(?P<lba>\d+) crc_w=0x(?P<w>[0-9a-f]+) crc_r=0x(?P<r>[0-9a-f]+) verify=(?P<verify>\w+)", re.MULTILINE),
-    "f429_sd_card_restore": re.compile(r"sdcard: restore lba=(?P<lba>\d+) verify=(?P<verify>\w+)", re.MULTILINE),
-    "f429_sd_card_pass": re.compile(r"sdcard: PASS SDCARD", re.MULTILINE),
-    "f429_sd_card_fail": re.compile(r"sdcard: FAIL (?P<reason>.+)$", re.MULTILINE),
     # The SDIO socket: identity, one line per CMD53 shape, and the mmc0
     # control. The CMD53 shapes carry their own error count, so a PASS with a
     # non-zero count is a broken image rather than a pass.
@@ -2873,36 +2860,6 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if "emmc_product" in expect and found["emmc_cid"]:
             if found["emmc_cid"]["product"] != expect["emmc_product"]:
                 errors.append("emmc: product name differs from the Linux readback")
-
-    if cases.get("f429_sd_card", {}).get("verdict") == "pass":
-        mode = found["f429_sd_card_mode"]
-        if not mode:
-            errors.append("f429_sd_card: PASS without a cardsize line")
-        else:
-            if int(mode["bs"]) != 512:
-                errors.append(f"f429_sd_card: block_size {mode['bs']} != 512")
-            if int(mode["width"]) != 4:
-                errors.append(f"f429_sd_card: width {mode['width']} != 4")
-            if int(mode["clock"]) < 20000000:
-                errors.append(
-                    f"f429_sd_card: clock {mode['clock']} < 20 MHz"
-                )
-            notes.append(
-                f"f429_sd_card: {mode['blocks']} blocks, "
-                f"{mode['clock']} Hz, {mode['width']} bit"
-            )
-        if found["f429_sd_card_cid"] is None:
-            errors.append("f429_sd_card: PASS without a CID line")
-        rw = found["f429_sd_card_rw"]
-        if not rw or rw["verify"] != "ok":
-            errors.append("f429_sd_card: write/readback mismatch")
-        restore = found["f429_sd_card_restore"]
-        if not restore or restore["verify"] != "ok":
-            errors.append("f429_sd_card: restore mismatch")
-        if not found["f429_sd_card_pass"]:
-            errors.append(
-                "f429_sd_card: PASS without the case's PASS SDCARD line"
-            )
 
     if cases.get("kpi_live", {}).get("verdict") == "pass":
         fail = found["kpi_fail"]

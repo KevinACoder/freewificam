@@ -22,11 +22,6 @@
  * interface's three; nothing in the compiled set calls them yet. */
 struct rfkill;
 struct rfkill_ops;
-/* [LNX] include/linux/rfkill.h: the switch's type enum is defined in the uapi file
- * this header includes below; the record's forward declaration is stated here so that
- * rfkill_alloc()'s parameter list does not declare a prototype-scope enum (which the
- * compiler warns about and which would hide the real type from a later use). */
-enum rfkill_type;
 /* [LNX] include/linux/rfkill.h: the switch allocator the wireless drivers call;
  * this port has no switch, so a caller reaching the body gets the unresolved
  * symbol (S1c) rather than a fake switch. */

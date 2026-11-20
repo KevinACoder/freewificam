@@ -124,21 +124,6 @@ extern long schedule_timeout_interruptible(long timeout);
 extern long schedule_timeout_uninterruptible(long timeout);
 asmlinkage void schedule(void);
 
-/*
- * [LNX] include/linux/sched/task.h:115-119: take a reference on a task object.
- * This port's task object is the calling thread's identity and lives for the life
- * of the image (sched.h:82-95 says so where it defines the record: three fields,
- * no usage count), so there is no reference to take and the identity is the
- * interface's answer. A driver that pairs it with kthread_stop_put() (brcmfmac's
- * watchdog teardown, sdio.c:2480) is expressing "keep this alive while I stop it",
- * which is already true here.
- */
-static __always_inline struct task_struct *
-get_task_struct(struct task_struct *t)
-{
-	return t;
-}
-
 /* [LNX] include/linux/sched.h:2028: extern int wake_up_process(struct task_struct *tsk); */
 extern int wake_up_process(struct task_struct *tsk);
 

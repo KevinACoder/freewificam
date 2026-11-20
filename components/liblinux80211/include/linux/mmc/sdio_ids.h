@@ -42,42 +42,4 @@
  */
 #define	SDIO_DEVICE_ID_REALTEK_RTW8821CS	0xc821
 
-/*
- * [LNX] include/linux/mmc/sdio_ids.h:56-83: the Broadcom vendor code and the parts
- * brcmfmac's SDIO id table names. The numbers are the manufacturer/product codes the
- * cards report in their CIS; the table is transcribed whole for this vendor because a
- * driver's id table matches on it (brcmfmac/bcmsdh.c's brcm_sdmmc_ids) and a missing
- * entry would silently leave a supported part unbound. The line's own board is the
- * AP6181, which is the BCM43362 (0xa962).
- */
-#define	SDIO_VENDOR_ID_BROADCOM			0x02d0
-/* [LNX] include/linux/mmc/sdio_ids.h:82: the Cypress vendor code; the wireless parts
- * that moved to Cypress keep their Broadcom product numbers, and brcmfmac's id table
- * matches them under this vendor (bcmsdh.c:975 names a CYPRESS part). */
-#define	SDIO_VENDOR_ID_CYPRESS			0x04b4
-#define	SDIO_DEVICE_ID_BROADCOM_43241		0x4324
-#define	SDIO_DEVICE_ID_BROADCOM_4329		0x4329
-#define	SDIO_DEVICE_ID_BROADCOM_4330		0x4330
-#define	SDIO_DEVICE_ID_BROADCOM_4334		0x4334
-#define	SDIO_DEVICE_ID_BROADCOM_4335_4339	0x4335
-#define	SDIO_DEVICE_ID_BROADCOM_4339		0x4339
-#define	SDIO_DEVICE_ID_BROADCOM_4345		0x4345
-#define	SDIO_DEVICE_ID_BROADCOM_4354		0x4354
-#define	SDIO_DEVICE_ID_BROADCOM_CYPRESS_89359	0x4355
-#define	SDIO_DEVICE_ID_BROADCOM_4356		0x4356
-#define	SDIO_DEVICE_ID_BROADCOM_4359		0x4359
-#define	SDIO_DEVICE_ID_BROADCOM_CYPRESS_4373	0x4373
-#define	SDIO_DEVICE_ID_BROADCOM_CYPRESS_43012	0xa804
-#define	SDIO_DEVICE_ID_BROADCOM_43143		0xa887
-#define	SDIO_DEVICE_ID_BROADCOM_43340		0xa94c
-#define	SDIO_DEVICE_ID_BROADCOM_43341		0xa94d
-#define	SDIO_DEVICE_ID_BROADCOM_43362		0xa962
-#define	SDIO_DEVICE_ID_BROADCOM_43364		0xa9a4
-#define	SDIO_DEVICE_ID_BROADCOM_43430		0xa9a6
-#define	SDIO_DEVICE_ID_BROADCOM_43439		0xa9af
-#define	SDIO_DEVICE_ID_BROADCOM_43455		0xa9bf
-#define	SDIO_DEVICE_ID_BROADCOM_43751		0xaae7
-#define	SDIO_DEVICE_ID_BROADCOM_43752		0xaae8
-#define	SDIO_DEVICE_ID_BROADCOM_CYPRESS_43439	0xbd3d
-
 #endif /* _LINUXKPI_LINUX_MMC_SDIO_IDS_H_ */

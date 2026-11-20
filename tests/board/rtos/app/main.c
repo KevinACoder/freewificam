@@ -18,7 +18,6 @@
 
 #include "arch_asm.h"
 #include "uart.h"
-#include "swd_console.h"
 
 #if defined(RTOS_BOARD_AUTO_RESET)
 #include "reset.h"
@@ -27,9 +26,6 @@
 #include "cases.h"
 #include "clock.h"
 #include "runner.h"
-#if defined(CONFIG_BOARD_STM32F429_CHALLENGER) && defined(CONFIG_LIBLINUX80211_SDIO)
-#include "sdio_board.h"
-#endif
 #if defined(CONFIG_F429_SDRAM)
 #include "fmc_sdram.h"
 #endif
@@ -140,25 +136,12 @@ static int watchdog_start(void)
 
 int main(void)
 {
-	swd_console_init();
 	uart_early_init();
 	rtos_clock_init();
 
 	uart_early_puts("rtos: banner backend=" RTOS_BACKEND_NAME
 			" kernel=" RTOS_KERNEL_NAME
 			" build=" FW_BUILD_TAG "\n");
-
-#if defined(CONFIG_BOARD_STM32F429_CHALLENGER) && defined(CONFIG_LIBLINUX80211_SDIO)
-	/* The SDIO socket shares its pins with the AP6181: the AP6181 profile
-	 * powers it (PB13 high) from the first instruction, every other line
-	 * holds its WIFI_EN low so the other card is alone on the bus.  The
-	 * SDIO host glue configures the pin again when the card is brought up. */
-#if defined(CONFIG_F429_SDIO_AP6181) && CONFIG_F429_SDIO_AP6181
-	sdio_board_wl_reg_on(true);
-#else
-	sdio_board_wl_reg_on(false);
-#endif
-#endif
 
 #if defined(CONFIG_F429_SDRAM)
 	/* The core board's 32 MB FMC SDRAM.  The wireless profiles place the

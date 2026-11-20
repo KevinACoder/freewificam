@@ -43,53 +43,6 @@ config F429_HEAP_SDRAM
 	  the application supplies the array.  The heap size is
 	  CONFIG_FREERTOS_HEAP_SIZE; the wireless profiles give it 4 MiB.
 
-config F429_SDIO_AP6181
-	bool "Power the onboard AP6181 (BCM43362) on the SDIO socket"
-	depends on BOARD_STM32F429_CHALLENGER
-	help
-	  The 挑战者 V2 carries an AP6181 (BCM43362) on the same SDIO pins the
-	  TF socket uses.  With this on, the socket bring-up drives PB13
-	  (WL_REG_ON / WIFI_EN) high and gives the module its settle before
-	  the host programs the card clock.  Off holds PB13 low, which is the
-	  8189FTV and the plain-SD-card state: the module must stay off the
-	  shared bus.  The TF socket must be empty in either case.
-
-config F429_AP6181_F1_PROBE
-	bool "AP6181 f1 write-shape probe before the brcmfmac download"
-	depends on F429_SDIO_AP6181
-	help
-	  Diagnostic only.  Before the first function-1 block write the
-	  brcmfmac firmware download issues, read the card's f1 block size and
-	  CCCR, then write a matrix of shapes (4/8/48 B byte mode and, with
-	  F429_AP6181_F1_PROBE_BLOCK, 1/2/32 blocks of 64 B) at their own
-	  addresses with single-block read-backs and a CHIPCLKCSR liveness
-	  check after each.  A failed shape is cleared with the CCCR IO abort
-	  so the next one runs on a live card.  Off for every shipping image.
-
-config F429_AP6181_F1_PROBE_BLOCK
-	bool "AP6181 probe also measures block-mode write shapes"
-	depends on F429_AP6181_F1_PROBE
-	default n
-	help
-	  Adds the 1-, 2- and 32-block cases to the write-shape probe.  They
-	  are off by default because a block write that fails inside the probe
-	  leaves the card's function 1 in a state the next block write cannot
-	  use, even after the CCCR abort brings the function back: the
-	  driver's own first download chunk then fails for a reason the probe
-	  caused.  Keep them off when the question is what the driver's first
-	  block write does.
-
-config F429_AP6181_F1_BYTE_WRITE
-	bool "AP6181 f1 bulk writes in byte mode"
-	depends on F429_SDIO_AP6181
-	help
-	  Fallback for the measured block-mode failure: function-1 bulk writes
-	  (the firmware download) are split into byte-mode CMD53 transfers of
-	  496 bytes, while reads keep the block path that already works.  It is
-	  slower than block mode and exists to get the firmware into the chip
-	  and wlan0 registered; the block-mode path stays the default until the
-	  probe has named the shape that breaks it.
-
 config F429_WIFI_STAGE
 	int "F429 8188EUS ladder stage (3 attach, 4 scan, 5 join, 6 throughput)"
 	depends on BOARD_STM32F429_CHALLENGER

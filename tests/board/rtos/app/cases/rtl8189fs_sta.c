@@ -60,10 +60,6 @@
 #include "linux80211/net.h"
 #include "linuxkpi_sdio.h"
 #include "rtl8189fs_diag.h"
-#include "skbuff/skbuff_pool.h"
-#include "FreeRTOS.h"
-#include "timers.h"
-#include "sdmmc_host_stm32f4_sdio_dbg.h"
 
 #include <linux/etherdevice.h>
 #include <linux/mmc/sdio_func.h>
@@ -89,30 +85,13 @@
 
 #define STA_WAIT_MS		30000U
 #define STA_POLL_MS		100U
-/* The scan's own per-channel dwell is slow enough on this card that a
- * whole-band walk takes tens of seconds; the find loop below polls the BSS
- * table every 100 ms and stops as soon as the AP appears, so this is an
- * umbrella, not a fixed cost.  Ten seconds cut the walk off before the bench
- * channel and made the join look intermittent for the wrong reason. */
-#define STA_SCAN_WAIT_MS	45000U
-#ifndef CONFIG_STA_WATCH_MS
-#define CONFIG_STA_WATCH_MS	1000
-#endif
-#ifndef CONFIG_STA_CONNECT_WAIT_MS
-#define CONFIG_STA_CONNECT_WAIT_MS	20000
-#endif
-#define STA_CONNECT_WAIT_MS	((unsigned)CONFIG_STA_CONNECT_WAIT_MS)
+#define STA_SCAN_WAIT_MS	10000U
+#define STA_CONNECT_WAIT_MS	20000U
 #define STA_PING_COUNT		20U
 #define STA_PING_TIMEOUT_MS	300U
 #define STA_PING_SMALL		56U
 #define STA_PING_LARGE		1400U
-#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
-/* The attach adds the firmware and queue messages to the mirrored set; the
- * diagnosis image has room for them, the delivery image does not. */
-#define STA_LOG_MAX		160U
-#else
 #define STA_LOG_MAX		40U
-#endif
 
 /* The AP->board arm is driven from the host on the `peer window ms=` anchor,
  * so both numbers are profile inputs (tests/board/rtos/app/Kconfig): a window
@@ -136,325 +115,10 @@ extern int rtw_lps_level;
 extern unsigned int rtw_drv_log_level;
 
 #define RTW_LOG_ERR		2	/* _DRV_ERR_ */
-#define RTW_LOG_INFO		4	/* _DRV_INFO_ */
 #define PS_MODE_ACTIVE		0
 #define LPS_OFF			0
 
 static unsigned sta_log_lines;
-
-/*
- * The card-interrupt round's one-shot reading: the host line's state, the
- * card's own interrupt registers (only when the engine's probe is on) and the
- * vendor's receive-stage counters.  It is printed when the line is armed and
- * when a wait ends, never per second: the per-second watch keeps the timeline
- * cheap on the 8 KiB console ring, and a boot's full reading is still a single
- * grep.  The reading is three messages (host/card/stage) because one console
- * message is capped at 255 bytes and an overlong one is truncated.
- *
- * What each group answers:
- *   irq=      entries/sdioit/spurious/dat1-high/self-poke.  `entries` with
- *             `sdioit` is the controller's word that the card's DAT1 event
- *             reached the CPU; `spurious` would be the line firing for another
- *             source; `self-poke` is the level-held fallback firing.
- *   mask/     the controller's own interrupt mask and data control: SDIOITIE in
- *   dctrl     the mask and SDIOEN in DCTRL are the two bits the detector needs.
- *   card      the card's HIMR/HISR and CCCR IEN/pending plus the receive length,
- *             i.e. whether the card ever asked (its HAL copy is not the
- *             register).
- *   stage     the vendor's receive path, one counter per check; the first
- *             counter that stays flat is the check a frame died at.
- *   skb       the pool's used/high/fail counts: a receive drop by allocation
- *             failure shows here, not in the driver's counters.
- */
-static void
-sta_card_line(const char *where)
-{
-	struct lkpi_sdio_card_probe cp;
-	struct lkpi_sdio_bus_info bus;
-	struct lkpi_sdio_stats ss;
-	struct lkpi_skb_pool_stats ps;
-	struct f4sdio_dbg f4;
-	struct rtl8189f_diag vd;
-
-	(void)memset(&cp, 0, sizeof(cp));
-	(void)memset(&bus, 0, sizeof(bus));
-	(void)memset(&ps, 0, sizeof(ps));
-	lkpi_sdio_stats_get(&ss);
-	lkpi_sdio_card_probe_get(&cp);
-	lkpi_sdio_bus_info_get(&bus);
-	lkpi_skb_pool_stats(&ps);
-	f4sdio_dbg_get(&f4);
-	rtl8189f_diag_get(&vd);
-	/* One message is capped at ULOG_MAX_MESSAGE_LENGTH (256): the console
-	 * truncates an overlong line instead of wrapping it, so the reading is
-	 * split into host/card/tx/stage lines that each fit.  The 255-byte cap
-	 * is a platform fact, not this case's choice. */
-	CASE_ANCHOR("rtl8189fs_sta: %s host bus=%u/%ukHz irq=%u/%u/%u/%u/%u "
-		    "masked=%u mask=0x%08x dctrl=0x%08x dat1=%u armed=%u tx=%u/%u "
-		    "sett=%u/%u drop_err=%u\n",
-		    where, bus.bus_width, (unsigned)(bus.clock_hz / 1000u),
-		    f4.irq_entries, f4.irq_sdioit, f4.irq_spurious,
-		    f4.dat1_high, f4.self_poke, f4.irq_masked_xfer,
-		    f4.mask, f4.dctrl, f4.dat1_level, f4.irq_armed,
-		    f4.tx_xfers, f4.tx_ok, f4.tx_txact_set, f4.tx_settle_timeout,
-		    f4.tx_drop_err);
-	CASE_ANCHOR("rtl8189fs_sta: %s card himr=0x%x hisr=0x%x ien=0x%x "
-		    "pend=0x%x rxl=%u cok=%u cfail=%u txpg=%u/%u/%u/%u "
-		    "oqt=%u cr=0x%02x txp=0x%02x fw=0x%02x rq=0x%08x\n",
-		    where, cp.himr, cp.hisr, cp.cccr_ien, cp.cccr_pending,
-		    cp.rx_req_len, cp.ok, cp.fails, cp.txpg_hi, cp.txpg_mid,
-		    cp.txpg_lo, cp.txpg_pub, cp.oqt_free, cp.reg_cr,
-		    cp.reg_txpause, cp.reg_mcufwdl, cp.reg_rqpn);
-	/* The firmware's doorbell and the MAC's own two readbacks.  A box word
-	 * that equals the command the driver sent says the host's write reached
-	 * the card; an all-zero box with HMETFR quiet says it never did. */
-	CASE_ANCHOR("rtl8189fs_sta: %s fwd hmefr=0x%02x box=%08x,%08x,%08x,%08x "
-		    "msr=0x%02x txdma=0x%08x\n",
-		    where, cp.hmefr,
-		    (unsigned)((unsigned)cp.hmebox[0] |
-			       ((unsigned)cp.hmebox[1] << 8) |
-			       ((unsigned)cp.hmebox[2] << 16) |
-			       ((unsigned)cp.hmebox[3] << 24)),
-		    (unsigned)((unsigned)cp.hmebox[4] |
-			       ((unsigned)cp.hmebox[5] << 8) |
-			       ((unsigned)cp.hmebox[6] << 16) |
-			       ((unsigned)cp.hmebox[7] << 24)),
-		    (unsigned)((unsigned)cp.hmebox[8] |
-			       ((unsigned)cp.hmebox[9] << 8) |
-			       ((unsigned)cp.hmebox[10] << 16) |
-			       ((unsigned)cp.hmebox[11] << 24)),
-		    (unsigned)((unsigned)cp.hmebox[12] |
-			       ((unsigned)cp.hmebox[13] << 8) |
-			       ((unsigned)cp.hmebox[14] << 16) |
-			       ((unsigned)cp.hmebox[15] << 24)),
-		    cp.reg_msr, cp.txdma_status);
-	{
-		const struct f4sdio_tx_rec *t = NULL;
-
-		if (f4.txq_rec_head != 0u)
-			t = &f4.txq[(f4.txq_rec_head - 1u) % F4SDIO_TX_REC_MAX];
-		CASE_ANCHOR("rtl8189fs_sta: %s drv rx=%u/%u fifo=%u free=%u/%u "
-			    "tp=%u xt=%x tf=%u/%u xtf=%u/%u st=%u/%u/%u txq=%u "
-			    "last=%u/%u/%u drop=%u/%u/%08x "
-			    "head=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-			    where, vd.rx_pkts, vd.rx_drops, vd.rx_fifo,
-			    vd.recvbuf_free, vd.recv_free, vd.tx_pkts,
-			    vd.xmit_thread, vd.txframe_free, vd.txbuf_free,
-			    vd.xmit_ext_free, vd.xmit_pending, vd.drv_stopped,
-			    vd.surprise_removed, vd.hw_init_done,
-			    f4.txq_rec_head, t ? t->dev : 0u, t ? t->len : 0u,
-			    t ? t->status : 0u,
-			    t ? t->txact_drop : 0u, t ? t->dcnt_drop : 0u,
-			    t ? t->sta_drop : 0u,
-			    t ? t->head[0] : 0u, t ? t->head[1] : 0u,
-			    t ? t->head[2] : 0u, t ? t->head[3] : 0u,
-			    t ? t->head[4] : 0u, t ? t->head[5] : 0u,
-			    t ? t->head[6] : 0u, t ? t->head[7] : 0u);
-	}
-	{
-		/* All four transmit records, each one a card write the seam called
-		 * a success: dev/len/status/drop_end/dcount/STA.  drop_end 1 is
-		 * the byte counter, 2 an error flag (the seam still says ok), 3
-		 * the bounded wait running out. */
-		unsigned int n = f4.txq_rec_head;
-		unsigned int k;
-
-		if (n > 4u)
-			n = 4u;
-		for (k = 0u; k < n; k++) {
-			const struct f4sdio_tx_rec *r =
-			    &f4.txq[(f4.txq_rec_head - 1u - k) % F4SDIO_TX_REC_MAX];
-
-			CASE_ANCHOR("rtl8189fs_sta: %s tx[%u]=%u/%u/%u/%u/%u/%08x\n",
-				    where, k, r->dev, r->len, r->status,
-				    r->drop_end, r->dcnt_drop, r->sta_drop);
-			CASE_ANCHOR("rtl8189fs_sta: %s txarm[%u]=%08x/%08x/%08x/%u\n",
-				    where, k, r->sta_arm, r->dctrl_arm,
-				    r->sta_burst, r->dcnt_burst);
-		}
-	}
-	CASE_ANCHOR("rtl8189fs_sta: %s stage=%u/%u/%u/%u/%u/%u/%u/%u/%u/%u "
-		    "skb=%u/%u/%u/%u/%u notify=%u wake=%u\n",
-		    where, vd.rx_stage_core, vd.rx_stage_pre, vd.rx_stage_ver,
-		    vd.rx_stage_mgmt, vd.rx_stage_ctrl, vd.rx_stage_data,
-		    vd.rx_stage_unknown, vd.rx_stage_post,
-		    vd.rx_stage_indicate, vd.rx_stage_ind_err,
-		    ps.skb_used, ps.skb_high, ps.alloc_fail, ps.fail_hdr,
-		    ps.fail_small, ss.card_notify, ss.irq_wakes);
-}
-
-/* The fast window's verdict: the range the transmit-side counters covered
- * while the join ran.  One line per window, not per sample: a page count that
- * moved down and back up is the only card-side evidence that the firmware took
- * a frame, and it is invisible to the one-second probe. */
-static void
-sta_card_fast(const char *where)
-{
-	struct lkpi_sdio_card_probe cp;
-
-	(void)memset(&cp, 0, sizeof(cp));
-	lkpi_sdio_card_probe_get(&cp);
-	CASE_ANCHOR("rtl8189fs_sta: %s fast n=%u per=%ums "
-		    "txpg=%u..%u/%u..%u/%u..%u/%u..%u oqt=%u..%u moved=%u "
-		    "hisr=0x%08x chg=%u rxl_max=%u hmefr=0x%02x box0=%08x/%u\n",
-		    where, cp.fast_samples, cp.fast_period_ms,
-		    cp.fast_txpg_min[0], cp.fast_txpg_max[0],
-		    cp.fast_txpg_min[1], cp.fast_txpg_max[1],
-		    cp.fast_txpg_min[2], cp.fast_txpg_max[2],
-		    cp.fast_txpg_min[3], cp.fast_txpg_max[3],
-		    cp.fast_oqt_min, cp.fast_oqt_max, cp.fast_txpg_changed,
-		    cp.fast_hisr_or, cp.fast_hisr_changes, cp.fast_rxl_max,
-		    cp.fast_hmefr_or, cp.fast_box0_last, cp.fast_box0_seen);
-}
-
-/* The last RX-FIFO read's head, 16 bytes a line: the card's receive status
- * descriptor followed by the first bytes of the 802.11 frame.  One record per
- * boot is enough to tell "the FIFO was read but not from where the driver
- * thinks" from "the frame really starts there". */
-static void
-sta_fifo_last(const char *where)
-{
-	struct f4sdio_dbg f4;
-	const struct f4sdio_fifo_rec *r;
-	unsigned int n, k;
-
-	f4sdio_dbg_get(&f4);
-	n = f4.fifo_rec_head;
-	if (n == 0u)
-		return;
-	r = &f4.fifo[(n - 1u) % F4SDIO_FIFO_REC_MAX];
-	CASE_ANCHOR("rtl8189fs_sta: %s fifo req=%u got=%u copied=%u end=%u "
-		    "st=%u zero=%u first=%u\n", where, r->req, r->got,
-		    r->copied, r->end, r->status, r->zero, r->first);
-	for (k = 0u; k < F4SDIO_FIFO_HEAD; k += 16u) {
-		CASE_ANCHOR("rtl8189fs_sta: %s fifo[%u] "
-			    "%02x%02x%02x%02x%02x%02x%02x%02x"
-			    "%02x%02x%02x%02x%02x%02x%02x%02x\n",
-			    where, k, r->head[k + 0u], r->head[k + 1u],
-			    r->head[k + 2u], r->head[k + 3u], r->head[k + 4u],
-			    r->head[k + 5u], r->head[k + 6u], r->head[k + 7u],
-			    r->head[k + 8u], r->head[k + 9u], r->head[k + 10u],
-			    r->head[k + 11u], r->head[k + 12u], r->head[k + 13u],
-			    r->head[k + 14u], r->head[k + 15u]);
-	}
-}
-
-/*
- * The command thread's scheduler state as a small integer the ring can carry
- * (osThreadState_t is the CMSIS order: inactive 0, ready 1, running 2,
- * blocked 3, terminated 4, error -1).  An unknown handle reads as -2 so the
- * line never silently claims a state it did not observe.
- */
-static int
-cmd_thread_state(const struct rtl8189f_diag *vd)
-{
-	if (vd->cmd_thread_handle == 0u)
-		return -2;
-	return (int)osThreadGetState((osThreadId_t)(uintptr_t)
-				     vd->cmd_thread_handle);
-}
-
-#if defined(CONFIG_STA_WATCH) && CONFIG_STA_WATCH
-/*
- * The one line a boot needs when the join stalls: how far the vendor MLME
- * got (scan state, station state, join result), whether the engine's card
- * events are arriving (pending reads vs nonzero, handler dispatches), and
- * what the last CMD53 read actually returned.  One per second, bounded by
- * the wait loops' own length; the delivery images compile it out.
- *
- * The interrupt round appends the card line's short form (the controller's
- * counters and mask plus the stage counters' four head marks) so the timeline
- * says when the line started firing; the run's runaway guard lives here too.
- */
-static void
-sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
-{
-	struct lkpi_sdio_stats ss;
-	struct rtl8189f_diag vd;
-	struct f4sdio_dbg f4;
-	static unsigned int last_sdioit;
-	static int first_irq_done;
-	int prog;
-
-	prog = lkpi_nl80211_assoc_progress(dev, RTL8189FS_SSID,
-					   (unsigned int)strlen(RTL8189FS_SSID));
-	lkpi_sdio_stats_get(&ss);
-	rtl8189f_diag_get(&vd);
-	f4sdio_dbg_get(&f4);
-
-	/* the first card interrupt is an event, not a sample: name the moment */
-	if ((f4.irq_sdioit != 0u) && !first_irq_done) {
-		first_irq_done = 1;
-		sta_card_line("irq first");
-	}
-	/* A line that keeps firing without the handler draining the card would
-	 * hold the pump at cycle rate; one boot is lost rather than the board. */
-	if ((f4.irq_sdioit - last_sdioit) > 2000u) {
-		(void)lkpi_sdio_pump_irq_set(false);
-		CASE_ANCHOR("rtl8189fs_sta: irq runaway %s it=%u d=%u mask=0x%08x\n",
-			    where, f4.irq_sdioit,
-			    f4.irq_sdioit - last_sdioit, f4.mask);
-	}
-	last_sdioit = f4.irq_sdioit;
-
-	CASE_INFO("rtl8189fs_sta: watch %s ms=%u prog=%d fw=0x%x join=%d "
-		  "mlme=0x%x scan=%u/%u io=%u/%u err=%u pend=%u/%u cb=%u "
-		  "it=%u/%u/%u/%u/%u m=0x%08x st=%u/%u/%u/%u pk=%u/%u "
-		  "claim=%s/%ums/%s/%s/%s\n",
-		  where, waited_ms, prog, vd.fw_state, (int)vd.join_res,
-		  vd.mlme_state, vd.scan_state, vd.scan_ch_idx,
-		  ss.io_direct, ss.io_extended, ss.errors,
-		  ss.pending_nonzero, ss.pending_reads, ss.callbacks,
-		  f4.irq_sdioit, f4.irq_spurious, f4.dat1_level,
-		  f4.self_poke, f4.irq_masked_xfer, f4.mask,
-		  vd.rx_stage_core, vd.rx_stage_ver, vd.rx_stage_post,
-		  vd.rx_stage_indicate, vd.rx_pkts, vd.rx_drops,
-		  lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
-		  lkpi_sdio_claim_op(), lkpi_sdio_pump_stage(),
-		  lkpi_sdio_pump_state());
-	/*
-	 * The scan's own walk, every ten seconds: the first line is the state
-	 * machine's position, the second is the timer that is supposed to move
-	 * it.  `sv=0/0` while `st=4` is the shape of "the timer stopped being
-	 * armed"; `sv=1/<expires>` with `expires` long past `jf` is "armed and
-	 * never fired".  One line per ten seconds keeps the 8 KiB ring usable
-	 * while still dating the moment the walk stopped.
-	 */
-	if ((waited_ms % 10000u) == 0u)
-		CASE_INFO("rtl8189fs_sta: walk %s ms=%u st=%u idx=%u next=%u "
-			  "sv=%u/%u jf=%u chnum=%u chms=%u bss=%u at=%08x\n",
-			  where, waited_ms, vd.scan_state, vd.scan_ch_idx,
-			  vd.scan_next_state, vd.survey_timer_pending,
-			  vd.survey_timer_expires, vd.jiffies_now,
-			  vd.scan_ch_num, vd.scan_ch_ms, vd.scan_bss_cnt,
-			  vd.survey_timer_addr);
-	/*
-	 * The command channel beside the timer channel, every ten seconds: a
-	 * survey step that fires and hands its work to the command thread shows
-	 * up as `cmd` climbing; a survey step whose command never runs shows up
-	 * as `cmd` frozen with `cmdq=1`.  Those two are the only shapes left
-	 * once the timer side is quiet.
-	 */
-	if ((waited_ms % 10000u) == 0u)
-		CASE_INFO("rtl8189fs_sta: cmdwalk %s ms=%u cmd=%u/%u q=%u thd=%u "
-			  "st=%d tcb=%08x sp=%08x exc=%08x pc=%08x lr=%08x "
-			  "head=%02x parm=%08x seq=%u\n",
-			  where, waited_ms, vd.cmd_issued, vd.cmd_done,
-			  vd.cmd_queue_len, vd.cmdthd_running,
-			  (int)cmd_thread_state(&vd), vd.cmd_thread_handle,
-			  vd.cmd_thread_sp, vd.cmd_saved_exc, vd.cmd_saved_pc,
-			  vd.cmd_saved_lr, vd.cmd_head_code, vd.cmd_head_parm,
-			  vd.cmd_seq);
-}
-#else
-static void
-sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
-{
-	(void)dev;
-	(void)where;
-	(void)waited_ms;
-}
-#endif
 
 /* The census probe is this file's only when the image has no throughput case:
  * rtl8189fs_throughput.c owns the same symbol in the throughput images, and one link
@@ -483,50 +147,15 @@ lkpi_census_pump_probe(void)
 static void
 sta_sink(ulog_level_t level, const char *line)
 {
-	/* Only the join's own milestone lines; everything else would be console
-	 * time the association cannot afford. */
-	static const char *const keys[] = {
-		"OnAssocReq", "OnAssocRsp", "joinbss", "connect", "issue_auth",
-		"start_clnt", "report_join_res", "link_timer", "issue_assocreq",
-		"start auth",
-		/* the receive path's own drop reasons: a frame the card handed
-		 * over and the driver threw away says which check refused it */
-		"crc_err", "exceed ptail", "abnormal rx", "recv fail",
-		"recvbuf unavailable", "no enough recv frame", "RX type",
-		"sd_int_hdl", "OnBeacon", "auth timeout", "assoc timeout",
-		/* the transmit path's silent-drop sites (the diagnostic join
-		 * window compiles them in): a refused write port, a failed
-		 * management-frame allocation, a stopped driver */
-		"hw_init_completed", "WRITE_PORT", "sd_write", "mgnt_xmit",
-		"alloc xmitbuf", "surprise",
-		/* the attach's own account: the firmware image and its checksum,
-		 * the firmware version, the power-on and queue setup */
-		"fw_ver", "DLFW", "Power on", "Firmware version", "H2C",
-		/* The host's two write-path witnesses, both the vendor's own:
-		 * `sdio_power_on_check` compares a 4-byte CMD53 write against its
-		 * read-back (0x1B8) and against the same bytes read by CMD52
-		 * (0x100), and FillH2CCmd prints when a firmware command was
-		 * dropped because the card had not taken the previous one. */
-		"0x1B8", "cmd52 and cmd53", "fw read cmd",
-		/* The engine's own refusals and stalls: a timer arm the CMSIS
-		 * adapter declined names the object and the caller, and a
-		 * command thread parked forever prints its own line.  These are
-		 * emitted by the component, not the driver, so the sink's
-		 * keyword list is the only thing that decides whether they
-		 * reach the ring at all. */
-		"lkpi:", "timer arm refused", "completion wait", "mutex stuck",
-	};
-	unsigned int k;
-
 	(void)level;
 	if (line == NULL || sta_log_lines >= STA_LOG_MAX)
 		return;
-	for (k = 0U; k < sizeof(keys) / sizeof(keys[0]); k++) {
-		if (strstr(line, keys[k]) != NULL) {
-			CASE_INFO("rtl8189fs_sta: drv %s\n", line);
-			sta_log_lines++;
-			return;
-		}
+	/* Only the join's own milestone lines; everything else would be console
+	 * time the association cannot afford. */
+	if (strstr(line, "OnAssocReq") != NULL || strstr(line, "OnAssocRsp") != NULL ||
+	    strstr(line, "joinbss") != NULL || strstr(line, "connect") != NULL) {
+		CASE_INFO("rtl8189fs_sta: drv %s\n", line);
+		sta_log_lines++;
 	}
 }
 
@@ -545,8 +174,6 @@ sta_wait_connected(struct net_device *dev, unsigned char bssid[6],
 		}
 		if (connected < 0)
 			return connected;
-		if ((waited != 0U) && ((waited % (unsigned)CONFIG_STA_WATCH_MS) == 0U))
-			sta_watch(dev, "conn", waited);
 		osDelay(STA_POLL_MS);
 		waited += STA_POLL_MS;
 	}
@@ -580,26 +207,14 @@ case_rtl8189fs_sta_run(void)
 
 	rtw_power_mgnt = PS_MODE_ACTIVE;
 	rtw_lps_level = LPS_OFF;
-#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
-	/* The attach's own account (firmware download and its checksum, the
-	 * firmware version, the queue setup) is INFO level; it closes again
-	 * right after the start verdict. */
-	rtw_drv_log_level = RTW_LOG_INFO;
-#else
 	rtw_drv_log_level = RTW_LOG_ERR;
-#endif
 
 	lkpi_sdio_fsl_install();
-#if defined(CONFIG_STA_DISPATCH_FORCE) && CONFIG_STA_DISPATCH_FORCE
-	/* Polled dispatch: this card reports its function interrupt only as the
-	 * DAT1 level, so the CCCR pending word stays quiet and the engine would
-	 * wait for an interrupt that never comes. */
-	lkpi_sdio_pump_force_dispatch_set(true);
-#endif
 	lkpi_module_init_run();
 	CASE_ANCHOR("rtl8189fs_sta: initcalls run\n");
 
 	lkpi_sdio_start();
+
 	while (waited < STA_WAIT_MS) {
 		dev = dev_get_by_name(&init_net, "wlan0");
 		if (dev != NULL)
@@ -616,45 +231,12 @@ case_rtl8189fs_sta_run(void)
 	CASE_ANCHOR("rtl8189fs_sta: wlan0 present=1 ifindex=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
 		    dev->ifindex, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
-	/* The module init re-reads the vendor's log level from its parameter
-	 * defaults, so the attach window is opened here, immediately before the
-	 * open that runs the download and the queue setup. */
-	rtw_drv_log_level = RTW_LOG_INFO;
-#endif
 	rc = dev_open(dev);
 	CASE_ANCHOR("rtl8189fs_sta: start rc=%d\n", rc);
-#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
-	rtw_drv_log_level = RTW_LOG_ERR;
-#endif
 	if (rc != 0) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL start rc=%d\n", rc);
 		return 2;
 	}
-
-	/*
-	 * The card interrupt is armed after the interface is up: the driver has
-	 * claimed the function and written the card's own interrupt mask by then,
-	 * so a card event that is already waiting reaches the freshly armed line
-	 * instead of being lost against an unconfigured card.  The card-side probe
-	 * runs from the pump under the claim; this call only enables it.
-	 */
-#if defined(CONFIG_STA_PUMP_IRQ) && CONFIG_STA_PUMP_IRQ
-	rc = lkpi_sdio_pump_irq_set(true);
-	CASE_ANCHOR("rtl8189fs_sta: irq mode rc=%d\n", rc);
-#endif
-#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
-	lkpi_sdio_card_probe_set(true);
-#endif
-	sta_card_line("irq arm");
-
-#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
-	/* The transmit-side window opens with the scan: the scan is the first
-	 * thing that writes frames to the card, and a window that only covered
-	 * the join would miss them. */
-	lkpi_sdio_card_probe_fast_set(true,
-				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
-#endif
 
 	wdev = dev->ieee80211_ptr;
 	if (wdev == NULL || wdev->wiphy == NULL) {
@@ -676,184 +258,11 @@ case_rtl8189fs_sta_run(void)
 		if (lkpi_nl80211_bss_find(wdev->wiphy, RTL8189FS_SSID, bssid,
 					  &freq, &sig) == 0)
 			goto found;
-		if ((waited != 0U) && ((waited % (unsigned)CONFIG_STA_WATCH_MS) == 0U))
-			sta_watch(dev, "scan", waited);
 		osDelay(STA_POLL_MS);
-	}
-
-	{
-		struct lkpi_sdio_stats sdio_stats;
-		struct rtl8189f_diag vd;
-		struct f4sdio_dbg sdio_f4dbg;
-
-		lkpi_sdio_stats_get(&sdio_stats);
-		rtl8189f_diag_get(&vd);
-		f4sdio_dbg_get(&sdio_f4dbg);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout sdio pump=%u callbacks=%u irq=%u io=%u/%u errors=%u\n",
-			    (unsigned)sdio_stats.pump_polls,
-			    (unsigned)sdio_stats.callbacks,
-			    (unsigned)sdio_stats.irq_claims,
-			    (unsigned)sdio_stats.io_direct,
-			    (unsigned)sdio_stats.io_extended,
-			    (unsigned)sdio_stats.errors);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout diag rx_pkts=%u rx_bytes=%u "
-			    "rx_drops=%u dbg=%u ampdu=%u cmd=%u/%u txframe_free=%u "
-			    "txbuf_free=%u rx_fifo=%u recvbuf_free=%u recv_free=%u "
-			    "crc=%u icv=%u\n",
-			    vd.rx_pkts, vd.rx_bytes, vd.rx_drops, vd.rx_dbg_drop,
-			    vd.rx_dbg_ampdu_drop, vd.cmd_issued, vd.cmd_done,
-			    vd.txframe_free, vd.txbuf_free, vd.rx_fifo,
-			    vd.recvbuf_free, vd.recv_free, vd.rx_crc_err,
-			    vd.rx_icv_err);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout tmr survey=%u/%u link=%u/%u "
-			    "jiffies=%u\n", vd.survey_timer_pending,
-			    vd.survey_timer_expires, vd.link_timer_pending,
-			    vd.link_timer_expires, vd.jiffies_now);
-		/* The walk itself, not just the state it stopped at: `state=4`
-		 * (SCAN_PROCESS) with `channel_idx=k` says the survey timer fired
-		 * k times, and `next`/`chms`/`bss` say what the next step was
-		 * going to be and how much of the channel list was left.  A
-		 * nonzero `modfail` whose timer address equals `survey_at` is the
-		 * one reading that names the refused arm as this walk's step. */
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout walk next=%u chnum=%u "
-			    "bss=%u chms=%u cmdthd=%u cmdq=%u "
-			    "survey_at=%08x link_at=%08x sto=%u/%u at=%08x\n",
-			    vd.scan_next_state, vd.scan_ch_num, vd.scan_bss_cnt,
-			    vd.scan_ch_ms, vd.cmdthd_running, vd.cmd_queue_len,
-			    vd.survey_timer_addr, vd.link_timer_addr,
-			    vd.scan_to_timer_pending, vd.scan_to_timer_expires,
-			    vd.scan_to_timer_addr);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout hisr=0x%08x himr=0x%08x "
-			    "match=0x%08x\n", vd.sdio_hisr, vd.sdio_himr,
-			    vd.sdio_hisr & vd.sdio_himr);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout cmdthd st=%d tcb=%08x "
-			    "sp=%08x exc=%08x pc=%08x lr=%08x head=%02x "
-			    "parm=%08x seq=%u\n",
-			    (int)cmd_thread_state(&vd), vd.cmd_thread_handle,
-			    vd.cmd_thread_sp, vd.cmd_saved_exc, vd.cmd_saved_pc,
-			    vd.cmd_saved_lr, vd.cmd_head_code, vd.cmd_head_parm,
-			    vd.cmd_seq);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout join fw=0x%x to_join=%u "
-			    "mlme=0x%x auth_seq=%u join_res=%d scan_state=%u ch=%u tx=%u\n",
-			    vd.fw_state, vd.to_join, vd.mlme_state, vd.auth_seq,
-			    (int)vd.join_res, vd.scan_state, vd.scan_ch_idx,
-			    vd.tx_pkts);
-		CASE_ANCHOR("rtl8189fs_sta: scan timeout rx account "
-			    "ext=%u/%u fail=%u pend=%u/%u disp=%u/%u irq=%u/%u\n",
-			    sdio_stats.ext_rx, sdio_stats.ext_rx_bytes,
-			    sdio_stats.ext_rx_fail, sdio_stats.pending_nonzero,
-			    sdio_stats.pending_reads, sdio_stats.dispatch_pending,
-			    sdio_stats.dispatch_look, sdio_f4dbg.irq_entries,
-			    sdio_f4dbg.irq_sdioit);
-		{
-			struct lkpi_timer_stats ts2;
-
-			lkpi_timer_stats_get(&ts2);
-			CASE_ANCHOR("rtl8189fs_sta: tmr sets=%u mods=%u fires=%u "
-				    "newfail=%u modfail=%u heap=%u minheap=%u "
-				    "daemon=%p\n",
-				    ts2.setups, ts2.mods, ts2.fires, ts2.new_fail,
-				    ts2.mod_fail, (unsigned)xPortGetFreeHeapSize(),
-				    (unsigned)xPortGetMinimumEverFreeHeapSize(),
-				    (void *)xTimerGetTimerDaemonTaskHandle());
-			CASE_ANCHOR("rtl8189fs_sta: tmr fires %p,%u %p,%u %p,%u %p,%u %p,%u\n",
-				    ts2.fire_fn[0], ts2.fire_fn_n[0],
-				    ts2.fire_fn[1], ts2.fire_fn_n[1],
-				    ts2.fire_fn[2], ts2.fire_fn_n[2],
-				    ts2.fire_fn[3], ts2.fire_fn_n[3],
-				    ts2.fire_fn[4], ts2.fire_fn_n[4]);
-			/* Odd numbers are the object addresses: compare them with the
-			 * walk line's `survey_at`.  A survey address that never appears
-			 * here while the walk is stuck is "the step never fired". */
-			CASE_ANCHOR("rtl8189fs_sta: tmr firetimer %p,%u %p,%u %p,%u %p,%u %p,%u %p,%u\n",
-				    ts2.fire_timer[0], ts2.fire_timer_n[0],
-				    ts2.fire_timer[1], ts2.fire_timer_n[1],
-				    ts2.fire_timer[2], ts2.fire_timer_n[2],
-				    ts2.fire_timer[3], ts2.fire_timer_n[3],
-				    ts2.fire_timer[4], ts2.fire_timer_n[4],
-				    ts2.fire_timer[5], ts2.fire_timer_n[5]);
-			CASE_ANCHOR("rtl8189fs_sta: tmr newfail %p,%u %p,%u %p,%u %p,%u\n",
-				    ts2.new_fail_fn[0], ts2.new_fail_fn_n[0],
-				    ts2.new_fail_fn[1], ts2.new_fail_fn_n[1],
-				    ts2.new_fail_fn[2], ts2.new_fail_fn_n[2],
-				    ts2.new_fail_fn[3], ts2.new_fail_fn_n[3]);
-			CASE_ANCHOR("rtl8189fs_sta: tmr newfail ra %p,%u %p,%u %p,%u %p,%u "
-				    "ctx primask=%u basepri=%u ipsr=%u\n",
-				    ts2.new_fail_ra[0], ts2.new_fail_ra_n[0],
-				    ts2.new_fail_ra[1], ts2.new_fail_ra_n[1],
-				    ts2.new_fail_ra[2], ts2.new_fail_ra_n[2],
-				    ts2.new_fail_ra[3], ts2.new_fail_ra_n[3],
-				    ts2.new_fail_primask, ts2.new_fail_basepri,
-				    ts2.new_fail_ipsr);
-			/* The refused arm's identity - the piece this line exists for.
-			 * `timer` is the object (compare with the walk line's
-			 * `survey_at`); `ctx` says whether the CMSIS adapter refused
-			 * because the CPU was in a masked section (IPS R/BASEPRI
-			 * nonzero) or because the timer service could not take the
-			 * command (all three zero). */
-			CASE_ANCHOR("rtl8189fs_sta: tmr modfail timer %p,%u %p,%u %p,%u %p,%u\n",
-				    ts2.mod_fail_timer[0], ts2.mod_fail_timer_n[0],
-				    ts2.mod_fail_timer[1], ts2.mod_fail_timer_n[1],
-				    ts2.mod_fail_timer[2], ts2.mod_fail_timer_n[2],
-				    ts2.mod_fail_timer[3], ts2.mod_fail_timer_n[3]);
-			CASE_ANCHOR("rtl8189fs_sta: tmr modfail ra %p,%u %p,%u %p,%u %p,%u "
-				    "ctx primask=%u basepri=%u ipsr=%u\n",
-				    ts2.mod_fail_ra[0], ts2.mod_fail_ra_n[0],
-				    ts2.mod_fail_ra[1], ts2.mod_fail_ra_n[1],
-				    ts2.mod_fail_ra[2], ts2.mod_fail_ra_n[2],
-				    ts2.mod_fail_ra[3], ts2.mod_fail_ra_n[3],
-				    ts2.mod_fail_primask, ts2.mod_fail_basepri,
-				    ts2.mod_fail_ipsr);
-		}
-		CASE_ANCHOR("rtl8189fs_sta: fifo account reads=%u bytes=%u zero=%u "
-			    "tx=%u/%u/%u\n", sdio_f4dbg.fifo_reads,
-			    sdio_f4dbg.fifo_bytes, sdio_f4dbg.fifo_zero,
-			    sdio_f4dbg.tx_xfers, sdio_f4dbg.tx_ok,
-			    sdio_f4dbg.tx_err);
-		{
-			unsigned int n = sdio_f4dbg.fifo_rec_head;
-			unsigned int k;
-
-			if (n > 4U)
-				n = 4U;
-			for (k = 0U; k < n; k++) {
-				const struct f4sdio_fifo_rec *r =
-				    &sdio_f4dbg.fifo[(sdio_f4dbg.fifo_rec_head - 1U - k) %
-						     F4SDIO_FIFO_REC_MAX];
-
-				CASE_ANCHOR("rtl8189fs_sta: fifo[%u] req=%u got=%u copied=%u "
-					    "end=%u st=%u zero=%u first=%u "
-					    "head=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-					    k, r->req, r->got, r->copied, r->end,
-					    r->status, r->zero, r->first,
-					    r->head[0], r->head[1], r->head[2],
-					    r->head[3], r->head[4], r->head[5],
-					    r->head[6], r->head[7]);
-			}
-		}
-		{
-			unsigned int n = sdio_f4dbg.rec_head;
-			unsigned int k;
-
-			if (n > 4U)
-				n = 4U;
-			for (k = 0U; k < n; k++) {
-				const struct f4sdio_rx_rec *r =
-				    &sdio_f4dbg.rec[(sdio_f4dbg.rec_head - 1U - k) %
-						    F4SDIO_RX_REC_MAX];
-
-				CASE_ANCHOR("rtl8189fs_sta: rxrec[%u] req=%u got=%u end=%u "
-					    "us=%u sta=0x%08x dctrl=0x%08x dcnt=%u\n",
-					    k, r->req, r->got, r->end, r->us,
-					    r->sta, r->dctrl, r->dcount);
-			}
-		}
 	}
 
 	/* A directed scan the peer did not answer in time: the wildcard shape is
 	 * the bench's fallback, the same one the AC 7260 round uses. */
-	sta_card_line("scan timeout");
-	sta_fifo_last("scan timeout");
 	rc = lkpi_nl80211_trigger_scan(dev, NULL, 0);
 	CASE_ANCHOR("rtl8189fs_sta: scan wildcard rc=%d\n", rc);
 	if (rc != 0) {
@@ -866,11 +275,6 @@ case_rtl8189fs_sta_run(void)
 			goto found;
 		osDelay(STA_POLL_MS);
 	}
-#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
-	lkpi_sdio_card_probe_fast_set(false,
-				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
-	sta_card_fast("scan");
-#endif
 	CASE_ANCHOR("rtl8189fs_sta: FAIL bss timeout (scan started, no BSS)\n");
 	return 6;
 
@@ -878,23 +282,6 @@ found:
 	CASE_ANCHOR("rtl8189fs_sta: bss ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x freq=%d signal=%d\n",
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, sig / 100);
-	/* The scan gate's own verdict line: the case, not the runner, decides
-	 * that a BSS was found in time.  The station case's later gates (join,
-	 * data plane) still have to pass; this anchor only says the walk
-	 * completed and cfg80211's table carries the bench AP. */
-	CASE_ANCHOR("rtl8189fs_sta: PASS SCAN\n");
-	{
-		struct lkpi_sdio_stats sdio_stats;
-
-		lkpi_sdio_stats_get(&sdio_stats);
-		CASE_ANCHOR("rtl8189fs_sta: scan bss_ms=%u sdio io=%u/%u errors=%u\n",
-			    (unsigned)waited,
-			    (unsigned)sdio_stats.io_direct,
-			    (unsigned)sdio_stats.io_extended,
-			    (unsigned)sdio_stats.errors);
-	}
-	sta_card_line("bss");
-	sta_fifo_last("bss");
 
 	/* --- association: through the real nl80211 handler ------------------ */
 
@@ -903,40 +290,14 @@ found:
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, rc);
 	if (rc != 0) {
-#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
-		lkpi_sdio_card_probe_fast_set(false,
-					     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
-		sta_card_fast("connect");
-#endif
 		CASE_ANCHOR("rtl8189fs_sta: FAIL connect rc=%d\n", rc);
 		return 7;
 	}
 
-#if defined(CONFIG_STA_VERBOSE_JOIN) && CONFIG_STA_VERBOSE_JOIN
-	/*
-	 * The join's own messages are INFO-level in the vendor stack, and the
-	 * delivery image keeps them off because a 115200 console costs the join
-	 * its timing.  A diagnostic boot opens the window only here - after the
-	 * scan, before the join - so the lines a stalled association needs
-	 * (issue_auth, the link timer, the receive of the auth response) are on
-	 * the console without the scan's chatter.
-	 */
-	rtw_drv_log_level = RTW_LOG_INFO;
-#endif
 	rc = sta_wait_connected(dev, bssid, &connected_ms);
-#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
-	lkpi_sdio_card_probe_fast_set(false,
-				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
-	sta_card_fast("join");
-#endif
-#if defined(CONFIG_STA_VERBOSE_JOIN) && CONFIG_STA_VERBOSE_JOIN
-	rtw_drv_log_level = RTW_LOG_ERR;
-#endif
 	if (rc != 0) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL connect timeout waited_ms=%u\n",
 			    connected_ms);
-		sta_card_line("conn timeout");
-		sta_fifo_last("conn timeout");
 		(void)lkpi_nl80211_disconnect(dev, 3u);
 		return 8;
 	}

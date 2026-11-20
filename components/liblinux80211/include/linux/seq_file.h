@@ -29,20 +29,7 @@
  * string helper declarations. */
 #include <linux/string.h>
 
-/*
- * [LNX] include/linux/seq_file.h: the record's members a compiled consumer
- * names. The interface's record is wide (the buffer, its cursors, the lock, the
- * operation table and the private pointer a debugfs entry is created with);
- * what the compiled set reaches is `private`, which the driver's show callbacks
- * hand back to dev_get_drvdata() - brcmfmac's feature.c:261 and sdio.c:3170
- * read it. The rest of the record belongs to the formatting machinery behind
- * seq_printf(), which this port does not carry (the /proc and debugfs surfaces
- * are compiled out), so it is not restated here.
- */
-struct seq_file {
-	void		*private;	/* the entry's private data */
-};
-
+struct seq_file;
 struct seq_operations;
 
 /*

@@ -1,20 +1,19 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * sdmmc_port.h - the port's own entry points over the imported SDIO/MMC/SD
- * stack.
+ * sdmmc_port.h - the port's own entry points over the imported SDIO/MMC stack.
  *
  * The imported units (components/fsl_sdmmc/) are consumed byte-faithfully and
  * are never edited, so everything this port adds to them lives here and in the
  * .c files beside it: the platform dispatch the upstream tree keeps in its own
  * host/ directory (SDIO_CfgInitialize for the WiFi socket, MMC_CfgInitialize
- * for the soldered eMMC, SD_CfgInitialize for the F429's TF slot), the host
- * glue for this board's controllers (SDMMCHOST_Init and the ops table), and
- * the wiring the upstream host glue does not carry at all.
+ * for the soldered eMMC), the host glue for this board's controllers
+ * (SDMMCHOST_Init and the ops table), and the wiring the upstream host glue
+ * does not carry at all.
  *
- * The three card types live in separate files (sdmmc_card.c,
- * sdmmc_mmc_card.c, sdmmc_sd_card.c) and separate host glues, because each
- * image drives exactly one of them: the stack's own contract is one
- * SDMMCHOST_Init per image, and a build that carried two would link two.
+ * The two card types live in separate files (sdmmc_card.c, sdmmc_mmc_card.c)
+ * and separate host glues (sdmmc_host_dwmmc.c, sdmmc_host_dwcmshc.c), because
+ * each image drives exactly one of them: the stack's own contract is one
+ * SDMMCHOST_Init per image, and a build that carried both would link two.
  *
  * @design ports & adapters, the adapter side: this header is the boundary the
  * seam implementation (lkpi_sdio_fsl.c) and the block-device registry
@@ -28,13 +27,9 @@
 
 #include "fsl_sdmmc.h"
 
-/* The card clock this port brings the SDIO card up at.  The default is the
- * high-speed 50 MHz an SDIO WiFi part runs at on 3.3 V signalling; a board
- * whose controller tops out lower (the F429's SDIO at 24 MHz) overrides it in
- * platform/build_defs.h. */
-#ifndef SDMMC_PORT_CARD_CLOCK_HZ
+/* The card clock this port brings the SDIO card up at: 50 MHz, the high-speed
+ * mode an SDIO WiFi part runs at on 3.3 V signalling. */
 #define SDMMC_PORT_CARD_CLOCK_HZ	50000000U
-#endif
 
 /*
  * Which controller the SDIO card sits on. An image drives exactly one, and the
@@ -112,18 +107,6 @@ void sdmmc_card_int_set(void (*cb)(void *), void *arg);
  * given a card-interrupt upcall. */
 void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable);
 
-/* The card's DAT0 busy line as this board's controller glue reads it (PC8 on
- * the F429): true while the card holds it low.  The SD stack polls it for
- * memory cards through SDMMCHOST_IsCardBusy; an SDIO CMD53 write has no such
- * poll, so the AP6181 write probe samples it directly. */
-bool sdmmc_port_dat0_busy(void);
-
-/* Select the controller's data-path mode for block-mode CMD53 writes: true is
- * the default SDIO mode (SDIOEN=1), false the memory-card path (SDIOEN=0).
- * The AP6181 write probe uses it to measure which mode the card acknowledges;
- * byte-mode writes keep SDIOEN unconditionally. */
-void sdmmc_port_block_write_sdioen(bool on);
-
 /* The controller state this port's host glue keeps, or NULL when the card is
  * not up. Exposed for the board case's evidence lines (the register fields, the
  * counters and the failure snapshot), not for the stack. */
@@ -150,13 +133,5 @@ void lkpi_sdio_fsl_install(void);
  * here because the platform dispatch calls it. */
 status_t FDWMSHCHOST_MMCConfig(sdmmc_mmc_t *sdmmc, sdmmchost_config_t *config);
 #endif /* CONFIG_FSL_SDMMC_ENABLE_MMC */
-
-#if defined(CONFIG_FSL_SDMMC_ENABLE_SD)
-/* The SD half of the F429 host glue: capability flags (3.3 V, 4-bit), the
- * card's user parameters (host card-detect, no 1.8 V switch), the maximum
- * block count and the source clock.  Declared here because SD_CfgInitialize
- * calls it. */
-status_t FDWMMCHOST_SDConfig(sdmmc_sd_t *sdmmc, sdmmchost_config_t *config);
-#endif /* CONFIG_FSL_SDMMC_ENABLE_SD */
 
 #endif /* SDMMC_PORT_H */

@@ -168,27 +168,6 @@ config LIBLINUX80211_RTL8XXXU
 	  redistributes the Realtek rtl8188eu firmware image
 	  (docs/LICENSES.md).
 
-config LIBLINUX80211_BRCMFMAC
-	bool "brcmfmac (BCM43362 / AP6181, SDIO FullMAC)"
-	depends on LIBLINUX80211_SDIO
-	depends on LIBLINUX80211_CFG80211
-	help
-	  Links the vendored brcmfmac FullMAC driver for the onboard AP6181
-	  (Broadcom BCM43362) over the SDIO engine.  The tree is the whole
-	  brcm80211/ import (ISC for the compiled units); the compiled set is
-	  24 units: brcmfmac core + BCDC + SDIO, the built-in wcc/cyw/bca
-	  helper cores, and brcmutil.  This driver is FullMAC: cfg80211 is the
-	  control plane and mac80211 is not linked.  The image needs the
-	  43362 firmware and NVRAM as compiled-in blobs (tools/rtos/fw-blobs.py).
-
-config LIBLINUX80211_SDIO_PROBE
-	bool "SDIO host probe (no vendor driver)"
-	depends on LIBLINUX80211_SDIO
-	help
-	  Compiles the SDIO host path and the imported card service without the
-	  vendor driver, for the first probe case.  The case enumerates the card
-	  and reports its identity; no function driver claims it.
-
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
 	depends on LIBLINUX80211_SDIO
@@ -302,20 +281,6 @@ config RTL8189FS_BR_EXT
 	help
 	  The GT Kbuild itself leaves this off: it calls br_fdb_find_port(),
 	  which only the Linux bridge module exports.
-
-config RTL8189FS_DBG_COUNTER
-	bool "CONFIG_DBG_COUNTER (vendor receive-stage counters)"
-	default n
-	help
-	  The vendor's DBG_COUNTER macros and the per-adapter rx_logs block:
-	  frames entering the receive function, the frame classes and the
-	  version/fragment/port-control rejects, all counted in place with no
-	  console output.  This is the stage decoder for "the card handed the
-	  driver a frame and rx_pkts never moved": with it, the counters name
-	  the check the frame died at instead of a log level raised for the
-	  boot (which changes the scan's timing on a 115200 console).  Counters
-	  only; the driver's behaviour is unchanged.  Off in every delivery
-	  image.
 
 endmenu
 

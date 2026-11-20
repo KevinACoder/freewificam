@@ -98,15 +98,6 @@ SECTIONS
 
     _sidata = LOADADDR(.data);
 
-    /* The SWD console ring sits at a fixed address so a debug host can read
-     * it without the ELF: head at +0x00, size at +0x04, data at +0x08.  The
-     * section is NOLOAD; swd_console_init() resets the head before the first
-     * character, so a soft reset also starts a fresh stream. */
-    .swd_console 0x20000000 (NOLOAD) :
-    {
-        KEEP(*(.swd_console))
-    } > RAM
-
     .data :
     {
         . = ALIGN(4);

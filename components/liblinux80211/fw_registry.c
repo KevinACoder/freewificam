@@ -146,8 +146,6 @@ lkpi_fw_async_run(struct work_struct *work)
 {
 	struct lkpi_fw_async *a = container_of(work, struct lkpi_fw_async, work);
 
-	lkpi_printf(ULOG_INFO_LEVEL, "fw: callback %s\n",
-	    (a->fw != NULL) ? "with blob" : "without blob");
 	a->cont(a->fw, a->context);
 	kfree(a);
 }
@@ -167,8 +165,6 @@ request_firmware_nowait(struct module *module, bool uevent, const char *name,
 	if (name == NULL || cont == NULL)
 		return -EINVAL;
 	fw = lkpi_fw_lookup(name);
-	lkpi_printf(ULOG_INFO_LEVEL, "fw: request %s -> %s\n", name,
-	    IS_ERR(fw) ? "missing" : "found");
 	if (IS_ERR(fw))
 		fw = NULL;
 	a = kmalloc(sizeof(*a), GFP_KERNEL);
@@ -188,24 +184,4 @@ request_firmware_nowait(struct module *module, bool uevent, const char *name,
 		return -EBUSY;
 	}
 	return 0;
-}
-
-/*
- * [LNX] include/linux/firmware.h:101-104: the silent asynchronous lookup - the
- * interface's request_firmware_nowait() with uevent false and the missing-blob
- * warning suppressed. brcmfmac walks its board-type firmware names with it
- * (firmware.c:720), where a miss is the expected path for every name but one, so
- * the same registry lookup and the same deferred continuation are used; only the
- * two policy flags are fixed. It must not report a load that did not happen: the
- * return is the asynchronous submission's, and a miss reaches the continuation with
- * NULL exactly as request_firmware_nowait()'s does.
- */
-int
-firmware_request_nowait_nowarn(struct module *module, const char *name,
-			       struct device *device, gfp_t gfp, void *context,
-			       void (*cont)(const struct firmware *fw,
-					    void *context))
-{
-	return request_firmware_nowait(module, false, name, device, gfp,
-				       context, cont);
 }

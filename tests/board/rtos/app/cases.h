@@ -150,27 +150,6 @@ int case_rtl8189fs_ap_run(void);
 #if defined(RTOS_CASE_RTL8189FS_THROUGHPUT)
 int case_rtl8189fs_throughput_run(void);
 #endif
-#if defined(RTOS_CASE_F429_SDIO_PROBE)
-int case_f429_sdio_probe_run(void);
-#endif
-/* The engine's own read path on the AP6181: CMD52/53 values cross-checked
- * against a second path, so a "success" that moved no bytes cannot pass. */
-#if defined(RTOS_CASE_F429_SDIO_ENGINE)
-int case_f429_sdio_engine_run(void);
-#endif
-/* The onboard AP6181 / BCM43362 through the vendored brcmfmac FullMAC:
- * C3 is attach (firmware download + wlan0 + dev_open). */
-#if defined(RTOS_CASE_AP6181_C3)
-int case_ap6181_c3_run(void);
-#endif
-#if defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
-int case_f429_sdio_write_probe_run(void);
-#endif
-/* The F429 TF slot as a raw SD block device (the SD card line): identify,
- * read block 0, write/read back/restore one block in the tail window. */
-#if defined(RTOS_CASE_F429_SD_CARD)
-int case_f429_sd_card_run(void);
-#endif
 
 /* The RTL8851BU (rtw89, USB): C3 attach over the linuxkpi USB engine and
  * CherryUSB, C4 scan, C5/C6 open join + ICMP.  The cases are mac80211 drivers'

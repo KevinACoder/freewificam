@@ -78,17 +78,7 @@ struct file_operations {
 	loff_t			(*llseek) (struct file *, loff_t, int);
 	ssize_t			(*read) (struct file *, char __user *, size_t, loff_t *);
 	ssize_t			(*write) (struct file *, const char __user *, size_t, loff_t *);
-	/* [LNX] include/linux/fs.h: the open/close pair a debugfs attribute installs;
-	 * the driver names `.open = simple_open` (brcmfmac's bus-reset attribute,
-	 * core.c:1224) and the member has to exist for the initialiser to name it. */
-	int			(*open) (struct inode *, struct file *);
-	int			(*release) (struct inode *, struct file *);
 };
-
-/* [LNX] include/linux/fs.h: `int simple_open(struct inode *, struct file *)` - the
- * "hand the inode's private pointer to the file" opener a driver uses when it has no
- * open work of its own. The body is the component's (linuxkpi_compat.c). */
-int simple_open(struct inode *inode, struct file *file);
 
 /* [LNX] include/linux/fs.h: the inode, carrying the private pointer a driver hangs
  * its data off and the size word i_size_read() returns. */

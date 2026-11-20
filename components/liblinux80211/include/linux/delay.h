@@ -20,11 +20,4 @@
 
 #include "../../linuxkpi_core.h"
 
-/* [LNX] include/linux/delay.h:13 includes <linux/sched.h>: a driver's delay helper
- * is written in terms of the task API (sleeping, yielding), and on a kernel build
- * this header is how cond_resched() and the schedule family reach a unit that names
- * only delay.h (brcmfmac's short-delay helper, cfg80211.c:4004, which reaches this
- * header through netdevice.h). */
-#include <linux/sched.h>
-
 #endif /* _LINUXKPI_LINUX_DELAY_H_ */

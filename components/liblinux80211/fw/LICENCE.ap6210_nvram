@@ -1,6 +1,0 @@
-SPDX-License-Identifier: GPL-2.0+
-NVRAM board file for the Ampak AP6210 (BCM43362) from linux-firmware,
-brcm/brcmfmac43362-sdio.cubietech,cubietruck.txt (C) 2018 Linaro Ltd.
-Used here as the first NVRAM for the AP6181 module (same chip family, same
-module vendor); the board-specific calibration values may need revisiting
-when the RF gate is measured.

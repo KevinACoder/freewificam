@@ -12,7 +12,6 @@
 
 #include "board_conf.h"
 #include "uart.h"
-#include "swd_console.h"
 
 #include "board.h"
 
@@ -60,7 +59,6 @@ void uart_early_init(void)
 
 void uart_early_putc(char c)
 {
-	swd_console_putc(c);
 	if (c == '\n') {
 		uart_early_putc('\r');
 	}

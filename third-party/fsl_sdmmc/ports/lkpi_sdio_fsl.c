@@ -259,19 +259,6 @@ static int lkpi_sdio_fsl_io_direct(void *ctx, unsigned int func, unsigned int ad
 
 	lkpi_sdio_site_set("fsl.c52");
 	(void)lkpi_sdio_claim_check(0);
-	{
-		static unsigned int win_logs;
-
-		if ((func == 1u) && (win_logs < 40u) &&
-		    ((addr == 0x1000Au) || (addr == 0x1000Bu) ||
-		     (addr == 0x1000Cu) || (addr == 0x1000Eu))) {
-			win_logs++;
-			lkpi_printf(ULOG_INFO_LEVEL,
-			    "fsl: c52 %s %05x=%02x\n",
-			    write ? "wr" : "rd", addr,
-			    (unsigned int)*value);
-		}
-	}
 	if (write) {
 		st = SDIO_IO_Write_Direct(card, (sdio_func_num_t)func, addr, value, false);
 	} else {
@@ -356,252 +343,6 @@ static int sdmmc_fsl_byte_transfer(sdio_card_t *card, unsigned int func,
 	return 0;
 }
 
-/*
- * The AP6181 f1 write-shape probe (CONFIG_F429_AP6181_F1_PROBE).
- *
- * The brcmfmac firmware download's first function-1 block write is the one
- * transfer the whole C3 gate turns on.  This probe runs at that point, in the
- * exact chip state the driver has reached, and asks the card which data-phase
- * shapes it accepts.  Every shape gets its own address, a known pattern, a
- * read-back through single-block CMD53 reads (the read shape this card has
- * always answered) and the CHIPCLKCSR read that says whether f1 still answers.
- * A shape that leaves f1 wedged is cleared with the CCCR I/O abort that
- * measured four recoveries in four wedges, so the next shape is measured on a
- * live card.
- *
- * The matrix is the C3 question, in the order the evidence needs it:
- *   1    4 B byte mode               the only shape confirmed to land so far
- *   2    8 B byte mode               used to "succeed" without landing
- *   3   48 B byte mode               same, larger
- *   4   64 B block mode, one block   single-block completion is DBCKEND
- *   5  128 B block mode, two blocks
- *   6 2048 B block mode, 32 blocks   the download's own chunk shape
- *
- * The probe writes only its own 2 KiB window per case; the real download
- * overwrites the same backplane area.  It never edits the imported driver tree.
- */
-#if defined(CONFIG_F429_AP6181_F1_PROBE) && CONFIG_F429_AP6181_F1_PROBE
-
-#define F1P_BLOCK	((uint32_t)SDIO_EXTEND_CMD_BLOCK_MODE_MASK | \
-			 (uint32_t)SDIO_EXTEND_CMD_OP_CODE_MASK)
-#define F1P_INCR	((uint32_t)SDIO_EXTEND_CMD_OP_CODE_MASK)
-#define F1P_CLKCSR	0x1000Eu
-#define F1P_DEVCTL	0x10009u
-
-static uint8_t f1p_pat[2048];
-static uint8_t f1p_rd[2048];
-static bool f1p_done;
-
-static int
-f1p_alive(sdio_card_t *card, uint8_t *clk)
-{
-	if (SDIO_IO_Read_Direct(card, kSDIO_FunctionNum1, F1P_CLKCSR, clk) !=
-	    kStatus_Success)
-		return -1;
-	return 0;
-}
-
-/* The card's own view before any write: f1 block size, f0 common block size,
- * CCCR and chip clock.  Read only: an experiment that programs the card before
- * measuring it is measuring its own perturbation. */
-static void
-f1p_card_state(sdio_card_t *card)
-{
-	uint8_t fbr[2] = {0u, 0u};
-	uint8_t fbr0[2] = {0u, 0u};
-	uint8_t cccr[6] = {0u};
-	uint8_t clk = 0u, devctl = 0u;
-	uint32_t i;
-
-	for (i = 0u; i < 2u; i++) {
-		(void)SDIO_IO_Read_Direct(card, kSDIO_FunctionNum0,
-					  0x110u + i, &fbr[i]);
-		(void)SDIO_IO_Read_Direct(card, kSDIO_FunctionNum0,
-					  0x010u + i, &fbr0[i]);
-	}
-	for (i = 0u; i < 6u; i++)
-		(void)SDIO_IO_Read_Direct(card, kSDIO_FunctionNum0, i, &cccr[i]);
-	(void)f1p_alive(card, &clk);
-	(void)SDIO_IO_Read_Direct(card, kSDIO_FunctionNum1, F1P_DEVCTL,
-				  &devctl);
-	lkpi_printf(ULOG_INFO_LEVEL,
-	    "f1probe: card fbr1=%02x%02x fbr0=%02x%02x "
-	    "cccr=%02x%02x%02x%02x%02x%02x clk=%02x devctl=%02x\n",
-	    (unsigned)fbr[1], (unsigned)fbr[0],
-	    (unsigned)fbr0[1], (unsigned)fbr0[0],
-	    (unsigned)cccr[0], (unsigned)cccr[1], (unsigned)cccr[2],
-	    (unsigned)cccr[3], (unsigned)cccr[4], (unsigned)cccr[5],
-	    (unsigned)clk, (unsigned)devctl);
-}
-
-static int
-f1p_write(sdio_card_t *card, uint32_t addr, uint32_t bytes, uint32_t blocks,
-	  uint32_t blksz)
-{
-	status_t st;
-
-	if (blocks != 0u) {
-		st = SDIO_IO_Write_Extended(card, kSDIO_FunctionNum1, addr,
-					    f1p_pat, blocks, F1P_BLOCK);
-	} else {
-		st = SDIO_IO_Write_Extended(card, kSDIO_FunctionNum1, addr,
-					    f1p_pat, bytes, F1P_INCR);
-	}
-	(void)blksz;
-	return (st == kStatus_Success) ? 0 : -1;
-}
-
-/* Read back with single 64-byte block reads: the one read shape this card has
- * already answered on every cold boot, so a read failure cannot be mistaken
- * for the write's verdict. */
-static int
-f1p_readback(sdio_card_t *card, uint32_t addr, uint32_t bytes)
-{
-	uint32_t total = (bytes + 63u) & ~(uint32_t)63u;
-	uint32_t off;
-
-	for (off = 0u; off < total; off += 64u) {
-		status_t st = SDIO_IO_Read_Extended(card, kSDIO_FunctionNum1,
-						    addr + off, f1p_rd + off,
-						    1u, F1P_BLOCK);
-
-		if (st != kStatus_Success)
-			return -1;
-	}
-	return 0;
-}
-
-static uint32_t
-f1p_bad(uint32_t bytes)
-{
-	uint32_t i;
-	uint32_t bad = 0u;
-
-	for (i = 0u; i < bytes; i++) {
-		if (f1p_rd[i] != f1p_pat[i])
-			bad++;
-	}
-	return bad;
-}
-
-static int
-f1p_alive_value(sdio_card_t *card)
-{
-	uint8_t clk = 0u;
-
-	return (f1p_alive(card, &clk) == 0) ? 1 : 0;
-}
-
-/*
- * Clear a wedged f1 after a failed shape.  The per-function I/O abort (CCCR
- * 0x06 = 1) measured four recoveries in four wedges; the card reset (0x08) is
- * the fallback, followed by re-enabling f1 and its block size.
- */
-static void
-f1p_recover(sdio_card_t *card, uint32_t blk)
-{
-	int abort_ok = 0, abort_alive = 0, reset_ok = 0, reset_alive = 0;
-
-	if (f1p_alive_value(card) != 0)
-		return;
-	abort_ok = (SDIO_AbortIO(card, kSDIO_FunctionNum1) ==
-		    kStatus_Success) ? 1 : 0;
-	abort_alive = f1p_alive_value(card);
-	if (abort_alive == 0) {
-		reset_ok = (SDIO_CardReset(card) == kStatus_Success) ? 1 : 0;
-		if (reset_ok != 0) {
-			(void)SDIO_EnableIO(card, kSDIO_FunctionNum1, true);
-			(void)SDIO_SetBlockSize(card, kSDIO_FunctionNum1, blk);
-		}
-		reset_alive = f1p_alive_value(card);
-	}
-	lkpi_printf(ULOG_INFO_LEVEL,
-	    "f1probe: recover abort=%d/%d cardreset=%d/%d\n",
-	    abort_ok, abort_alive, reset_ok, reset_alive);
-}
-
-/*
- * One write shape: write a known pattern, read it back with single-block reads,
- * check f1, report.  A dead f1 is recovered so the next shape runs on a live
- * card.  Returns 0 when the shape both completed and read back exactly.
- */
-static int
-f1p_case(sdio_card_t *card, uint32_t tag, uint32_t addr, uint32_t bytes,
-	 uint32_t blk, bool sdioen)
-{
-	uint32_t bad = 0xFFFFFFFFu;
-	uint32_t i;
-	uint8_t clk = 0u;
-	int wr, alive;
-
-	(void)SDIO_SetBlockSize(card, kSDIO_FunctionNum1, (blk != 0u) ? blk : 64u);
-	sdmmc_port_block_write_sdioen(sdioen);
-	for (i = 0u; i < bytes; i++)
-		f1p_pat[i] = (uint8_t)(0x5Au ^ (uint8_t)tag ^ (uint8_t)i);
-	wr = f1p_write(card, addr, bytes, (blk != 0u) ? (bytes / blk) : 0u, blk);
-	if ((wr == 0) && (f1p_readback(card, addr, bytes) == 0))
-		bad = f1p_bad(bytes);
-	alive = (f1p_alive(card, &clk) == 0) ? 1 : 0;
-	lkpi_printf(ULOG_INFO_LEVEL,
-	    "f1probe: case%u %s n=%u addr=%05x wr=%d bad=%d alive=%d clk=%02x\n",
-	    (unsigned)tag, (blk != 0u) ? "blk" : "byt", (unsigned)bytes,
-	    (unsigned)addr, wr,
-	    (bad == 0u) ? 0 : ((bad == 0xFFFFFFFFu) ? -1 : (int)bad),
-	    alive, (unsigned)clk);
-	if ((wr != 0) || (alive == 0))
-		f1p_recover(card, (blk != 0u) ? blk : 64u);
-	return ((wr == 0) && (bad == 0u) && (alive != 0)) ? 0 : -1;
-}
-
-static int
-f1_write_probe(sdio_card_t *card, uint32_t blksz)
-{
-	static const struct {
-		uint32_t	bytes;
-		uint32_t	blk;
-		uint32_t	addr;
-	} m[6] = {
-		{4u,    0u,  0x8000u},
-		{8u,    0u,  0x8100u},
-		{48u,   0u,  0x8200u},
-		{64u,   64u, 0x8400u},
-		{128u,  64u, 0x8500u},
-		{2048u, 64u, 0x8600u},
-	};
-	uint32_t pass = 0u, fail = 0u;
-	uint32_t i;
-#if defined(CONFIG_F429_AP6181_F1_PROBE_BLOCK) && \
-	CONFIG_F429_AP6181_F1_PROBE_BLOCK
-	uint32_t cases = 6u;
-#else
-	/*
-	 * The block cases are opt-in: a block write that fails inside the probe
-	 * leaves function 1 in a state the next block write cannot use even
-	 * after the CCCR abort revives it, so the default probe measures only
-	 * the byte shapes and lets the driver's own first block write be the
-	 * block-mode measurement.
-	 */
-	uint32_t cases = 3u;
-#endif
-
-	(void)blksz;
-	f1p_card_state(card);
-	for (i = 0u; i < cases; i++) {
-		if (f1p_case(card, i + 1u, m[i].addr, m[i].bytes, m[i].blk,
-			     true) == 0)
-			pass++;
-		else
-			fail++;
-	}
-	/* Leave the engine's own shape programmed for the driver's write. */
-	(void)SDIO_SetBlockSize(card, kSDIO_FunctionNum1, 64u);
-	sdmmc_port_block_write_sdioen(true);
-	lkpi_printf(ULOG_INFO_LEVEL,
-	    "f1probe: done pass=%u fail=%u\n", (unsigned)pass, (unsigned)fail);
-	return 0;
-}
-#endif /* CONFIG_F429_AP6181_F1_PROBE */
-
 /* Block mode: count blocks of the size the card's function register holds. */
 static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 				    unsigned int addr, uint8_t *buf,
@@ -633,104 +374,25 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 		return -LKPI_SDIO_BE_ERR_INVAL;
 	}
 
-#if defined(CONFIG_F429_AP6181_F1_BYTE_WRITE) && CONFIG_F429_AP6181_F1_BYTE_WRITE
-	/*
-	 * Measured fallback for the AP6181's function-1 blocks: the card accepts
-	 * the first block-mode write and then answers every f1 command with R5,
-	 * while byte-mode CMD53 writes of 4 bytes are the only f1 write that
-	 * lands and reads back on every boot measured.  The firmware download
-	 * therefore reaches the card in 4-byte byte-mode transfers: many small
-	 * CMD53s (about fifty thousand for the 43362 image) instead of block
-	 * writes, which is slow but is the one shape the card confirms.  Reads
-	 * keep the block path that already works; this arm exists to get the
-	 * firmware in and wlan0 registered, not to claim the block path is
-	 * understood.
-	 */
-#define F1_BYTE_WRITE_CHUNK	4u
-
-	if (write && (func == 1u)) {
-		uint32_t total = (uint32_t)blksz * (uint32_t)blocks;
-		uint32_t done = 0u;
-
-		while (done < total) {
-			uint32_t n = total - done;
-			int ret;
-
-			if (n > F1_BYTE_WRITE_CHUNK)
-				n = F1_BYTE_WRITE_CHUNK;
-			ret = sdmmc_fsl_byte_transfer(card, func, addr + done,
-						      buf + done, n, true, true);
-			if (ret != 0)
-				return ret;
-			done += n;
-		}
-		return 0;
-	}
-#endif
-
-	/*
-	 * Bounded trace of the block transfers (twelve lines), which is what a
-	 * session reads the window and address sequence from.
-	 */
-	{
-		static unsigned int blk_logs;
-
-		if (blk_logs < 12u) {
-			blk_logs++;
-			lkpi_printf(ULOG_INFO_LEVEL,
-			    "fsl: blk %s f%u addr=%05x n=%u\n",
-			    write ? "wr" : "rd", func, addr,
-			    (unsigned int)blocks);
-		}
-	}
-#if defined(CONFIG_F429_AP6181_F1_PROBE) && CONFIG_F429_AP6181_F1_PROBE
-	/*
-	 * The shape probe runs before the first f1 block write the driver
-	 * issues - the firmware download's first chunk - and answers the
-	 * question the second-command arms could not: which write shape this
-	 * card accepts, and what the chip's core state is when it is asked.
-	 * A failure stops the download here, with the card's own verdict
-	 * printed, instead of letting the driver hammer a wedged function.
-	 */
-	if (write && (func == 1u) && !f1p_done) {
-		f1p_done = true;
-		if (f1_write_probe(card, blksz) != 0)
-			return -LKPI_SDIO_BE_ERR_CARD;
-	}
-#endif
-	unsigned int nblocks = blocks;
-
 	if (write) {
 		st = SDIO_IO_Write_Extended(card, (sdio_func_num_t)func, addr, buf,
-					    nblocks, flags);
+					    blocks, flags);
 	} else {
 		st = SDIO_IO_Read_Extended(card, (sdio_func_num_t)func, addr, buf,
 					   blocks, flags);
 	}
-	if (st != kStatus_Success) {
-		/*
-		 * A failed function-1 block write leaves the card holding the data
-		 * phase open: every later function-1 command is then answered R5
-		 * 0x2800 (R5_ERROR, IO_CURRENT_STATE=TRN).  The CCCR per-function
-		 * I/O abort clears that state (measured on this card: four
-		 * recoveries in four wedges), so the driver's error path resumes
-		 * with a live function instead of a dead one.  Only for writes to
-		 * a function: the abort is itself a function-0 register write and
-		 * must not run inside a function-0 transfer.
-		 */
-		if (write && (func != 0u))
-			(void)SDIO_AbortIO(card, (sdio_func_num_t)func);
-		return sdmmc_fsl_err(st);
-	}
+
 #ifdef CONFIG_LKPI_CENSUS
-	lkpi_fsl_census_state.blk_ops++;
-	if (write)
-		lkpi_fsl_census_state.tx_bytes += (uint64_t)blksz * blocks;
-	else
-		lkpi_fsl_census_state.rx_bytes += (uint64_t)blksz * blocks;
+	if (st == kStatus_Success) {
+		lkpi_fsl_census_state.blk_ops++;
+		if (write)
+			lkpi_fsl_census_state.tx_bytes += (uint64_t)blksz * blocks;
+		else
+			lkpi_fsl_census_state.rx_bytes += (uint64_t)blksz * blocks;
+	}
 #endif
 
-	return sdmmc_fsl_err(kStatus_Success);
+	return sdmmc_fsl_err(st);
 }
 
 void
@@ -773,31 +435,8 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 
 	lkpi_sdio_site_set("fsl.xfer");
 	(void)lkpi_sdio_claim_check(1);
-	/*
-	 * The block flag says the caller's count is a byte count.  A request
-	 * shorter than one block (the 472-byte C2H read at the end of a scan is
-	 * the one that exposed it) cannot use the block path: passing 472 to the
-	 * stack's block count turns it into 472 blocks of 512 bytes and the
-	 * transfer never completes.  Fall back to the byte path for the tail.
-	 */
 	if ((flags & LKPI_SDIO_BE_F_BLOCK) != 0U) {
-		uint32_t blksz = (func == 0U) ? card->io0blockSize :
-						(uint32_t)card->ioFBR[func - 1U].ioBlockSize;
-
-
-		/*
-		 * With the block flag, `count` is a BLOCK COUNT, not a byte
-		 * count (the seam says so, and the engine's splitter hands it
-		 * over that way).  Comparing it to the block size - the check
-		 * this file used to make - turned every one-block request (the
-		 * common case: a 64-byte block at a 64-byte function) into a
-		 * one-byte transfer, which returned success and moved one byte.
-		 */
-		if ((blksz != 0U) && (count != 0U)) {
-			ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
-		} else {
-			ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
-		}
+		ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
 	} else {
 		ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
 	}

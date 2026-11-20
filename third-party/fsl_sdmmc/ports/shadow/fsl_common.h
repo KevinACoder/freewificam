@@ -53,18 +53,6 @@ extern "C" {
 #if !defined(SZ_1G)
 #define SZ_1G				0x40000000
 #endif
-/* The SD card dump compares against the doubled thresholds; the upstream
- * kernel helper header carries them and the shadow must too, or the imported
- * fsl_sd.c does not compile. */
-#if !defined(SZ_2K)
-#define SZ_2K				0x00000800
-#endif
-#if !defined(SZ_2M)
-#define SZ_2M				0x00200000
-#endif
-#if !defined(SZ_2G)
-#define SZ_2G				0x80000000
-#endif
 
 /*! @brief Construct a status code value from a group and code number. */
 #define MAKE_STATUS(group, code) ((((group)*100L) + (code)))
@@ -253,12 +241,6 @@ typedef int32_t status_t;
 #define SUPPRESS_FALL_THROUGH_WARNING()
 #endif
 
-/*
- * The CMSIS core (the F429 SDIO host's ST LL import) defines the same
- * intrinsics in cmsis_gcc.h.  When that header is already in this translation
- * unit, its definitions win; the SDK's copy is only for the plain SDK build.
- */
-#if !defined(__CMSIS_GCC_H)
 static inline uint32_t __REV(uint32_t value)
 {
     return __builtin_bswap32(value);
@@ -268,7 +250,6 @@ static inline uint16_t __REV16(uint16_t value)
 {
     return __builtin_bswap16(value);
 }
-#endif
 
 static inline uintptr_t __ALIGN(uintptr_t addr, uintptr_t alignment, size_t size, size_t *usage)
 {

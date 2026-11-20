@@ -27,11 +27,6 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
-
-/* [LNX] include/linux/wait.h: the wait-entry record the manual wait protocol
- * (init_waitqueue_entry/add_wait_queue/remove_wait_queue below) takes; the
- * interface declares the record in that header, so the body takes it from there. */
-#include <linux/wait.h>
 #include "linuxkpi_impl.h"
 
 /*
@@ -1872,78 +1867,14 @@ void tasklet_kill(struct tasklet_struct *t)
 
 static struct lkpi_timer_stats lkpi_tstats;
 
-static void lkpi_timer_cb(void *arg);
-
-/*
- * Create the OS timer object with interrupts live.
- *
- * The CMSIS adapter refuses to create a timer while the CPU reports interrupt
- * context, and its test counts BASEPRI != 0 as interrupt context - which is
- * exactly the state a driver is in when it initialises a timer inside its own
- * critical section (the vendor station table builds each new sta_info that
- * way).  A refusal there is permanent: the timer object never exists, every
- * later arm is a no-op, and the step it drives - an ADDBA retry, a link
- * timeout - silently never happens.  Creating the FreeRTOS object is a
- * thread-only call that touches allocator and timer-service state, not the
- * caller's protected data, so it runs with the caller's mask lifted and the
- * exact prior state restored afterwards.
- */
-static osTimerId_t lkpi_timer_new(struct timer_list *t)
-{
-#ifdef __arm__
-	uint32_t basepri;
-	uint32_t primask;
-	osTimerId_t id;
-
-	__asm__ __volatile__("mrs %0, basepri" : "=r"(basepri));
-	__asm__ __volatile__("mrs %0, primask" : "=r"(primask));
-	__asm__ __volatile__("msr basepri, %0" :: "r"(0u) : "memory");
-	__asm__ __volatile__("cpsie i" ::: "memory");
-	id = osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
-	__asm__ __volatile__("msr basepri, %0" :: "r"(basepri) : "memory");
-	if (primask != 0u)
-		__asm__ __volatile__("cpsid i" ::: "memory");
-	return id;
-#else
-	return osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
-#endif
-}
-
 static void lkpi_timer_cb(void *arg)
 {
 	struct timer_list *t = arg;
 
 	t->tl_pending = false;
 	lkpi_tstats.fires++;
-	if (t->tl_func != NULL) {
-		unsigned int i;
-
-		for (i = 0; i < 6u; i++) {
-			if (lkpi_tstats.fire_fn[i] == (void *)t->tl_func) {
-				lkpi_tstats.fire_fn_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.fire_fn[i] == NULL) {
-				lkpi_tstats.fire_fn[i] = (void *)t->tl_func;
-				lkpi_tstats.fire_fn_n[i] = 1;
-				break;
-			}
-		}
-		/* The object as well: one wrapper callback serves every vendor
-		 * timer, so the function pointer cannot say which step ran. */
-		for (i = 0; i < 6u; i++) {
-			if (lkpi_tstats.fire_timer[i] == (void *)t) {
-				lkpi_tstats.fire_timer_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.fire_timer[i] == NULL) {
-				lkpi_tstats.fire_timer[i] = (void *)t;
-				lkpi_tstats.fire_timer_n[i] = 1;
-				break;
-			}
-		}
+	if (t->tl_func != NULL)
 		t->tl_func(t);
-	}
 }
 
 void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
@@ -1970,37 +1901,11 @@ void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
 	t->tl_pending = false;
 
 	shell->owner = t;
-	shell->timer = lkpi_timer_new(t);
+	shell->timer = osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
 	shell->inited = (shell->timer != NULL) ? 1u : 0u;
 	lkpi_tstats.setups++;
-	if (!shell->inited) {
-		unsigned int i;
-		void *ra = __builtin_return_address(0);
-
+	if (shell->timer == NULL)
 		lkpi_tstats.new_fail++;
-		for (i = 0; i < 4u; i++) {
-			if (lkpi_tstats.new_fail_fn[i] == (void *)t->tl_func) {
-				lkpi_tstats.new_fail_fn_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.new_fail_fn[i] == NULL) {
-				lkpi_tstats.new_fail_fn[i] = (void *)t->tl_func;
-				lkpi_tstats.new_fail_fn_n[i] = 1;
-				break;
-			}
-		}
-		for (i = 0; i < 4u; i++) {
-			if (lkpi_tstats.new_fail_ra[i] == ra) {
-				lkpi_tstats.new_fail_ra_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.new_fail_ra[i] == NULL) {
-				lkpi_tstats.new_fail_ra[i] = ra;
-				lkpi_tstats.new_fail_ra_n[i] = 1;
-				break;
-			}
-		}
-	}
 }
 
 int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
@@ -2009,7 +1914,6 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	    (struct lkpi_callout_shell *)(void *)t->_callout;
 	long delta = (long)(expires - lkpi_jiffies());
 	int was;
-	osStatus_t arm_status;
 
 	if (!shell->inited)
 		return 0;
@@ -2018,35 +1922,11 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	if (delta < 1)
 		delta = 1;
 
-	/*
-	 * Record the expiry the caller asked for.  A compiled consumer reads it
-	 * back off the object (`tmr survey=<pending>/<expires>`), and it is the
-	 * only witness that separates "the step was armed for a later tick" from
-	 * "the step was armed and the deadline is already in the past".
-	 */
-	t->expires = expires;
 	t->tl_pending = true;
 	shell->pending = 1;
 	lkpi_tstats.mods++;
-	{
+	if (osTimerStart(shell->timer, (uint32_t)delta) != osOK) {
 		unsigned int i;
-
-		for (i = 0; i < 6u; i++) {
-			if (lkpi_tstats.arm_timer[i] == (void *)t) {
-				lkpi_tstats.arm_timer_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.arm_timer[i] == NULL) {
-				lkpi_tstats.arm_timer[i] = (void *)t;
-				lkpi_tstats.arm_timer_n[i] = 1;
-				break;
-			}
-		}
-	}
-	arm_status = osTimerStart(shell->timer, (uint32_t)delta);
-	if (arm_status != osOK) {
-		unsigned int i;
-		void *ra = __builtin_return_address(0);
 
 		lkpi_tstats.mod_fail++;
 		for (i = 0; i < 4u; i++) {
@@ -2060,49 +1940,10 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 				break;
 			}
 		}
-		/* The object, not just the callback: one callback can drive two
-		 * timers (the survey and the link share the shape), and the
-		 * address is what says which step died. */
-		for (i = 0; i < 4u; i++) {
-			if (lkpi_tstats.mod_fail_timer[i] == (void *)t) {
-				lkpi_tstats.mod_fail_timer_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.mod_fail_timer[i] == NULL) {
-				lkpi_tstats.mod_fail_timer[i] = (void *)t;
-				lkpi_tstats.mod_fail_timer_n[i] = 1;
-				break;
-			}
-		}
-		for (i = 0; i < 4u; i++) {
-			if (lkpi_tstats.mod_fail_ra[i] == ra) {
-				lkpi_tstats.mod_fail_ra_n[i]++;
-				break;
-			}
-			if (lkpi_tstats.mod_fail_ra[i] == NULL) {
-				lkpi_tstats.mod_fail_ra[i] = ra;
-				lkpi_tstats.mod_fail_ra_n[i] = 1;
-				break;
-			}
-		}
-#ifdef __arm__
-		{
-			uint32_t primask;
-			uint32_t basepri;
-			uint32_t ipsr;
-
-			__asm__ __volatile__("mrs %0, primask" : "=r"(primask));
-			__asm__ __volatile__("mrs %0, basepri" : "=r"(basepri));
-			__asm__ __volatile__("mrs %0, ipsr" : "=r"(ipsr));
-			lkpi_tstats.mod_fail_primask = primask;
-			lkpi_tstats.mod_fail_basepri = basepri;
-			lkpi_tstats.mod_fail_ipsr = ipsr;
-		}
-#endif
 		if (lkpi_tstats.mod_fail <= 4u)
 			lkpi_printf(ULOG_ERROR_LEVEL,
-			    "lkpi: timer arm refused fn=%p timer=%p delta=%ld jiffies=%lu thread=%p\n",
-			    (void *)t->tl_func, (void *)t, delta, lkpi_jiffies(),
+			    "lkpi: timer arm refused fn=%p delta=%ld jiffies=%lu thread=%p\n",
+			    (void *)t->tl_func, delta, lkpi_jiffies(),
 			    (void *)osThreadGetId());
 		t->tl_pending = false;
 		shell->pending = 0;
@@ -2200,19 +2041,6 @@ void lkpi_waitqueue_init(struct wait_queue_head *wq)
 	cv->inited = (cv->sem != NULL) ? 1u : 0u;
 }
 
-/*
- * [LNX] include/linux/wait.h: `waitqueue_active()` - the lockless "does anything
- * wait here" test a waker makes before it pays for a wake. This port's head is a
- * condition shell whose parked waiters are counted (lkpi_waitq_cv()->waiters), so
- * the answer is that count rather than an entry list.
- */
-int lkpi_waitqueue_active(struct wait_queue_head *wq)
-{
-	struct lkpi_cv_shell *cv = lkpi_wq_cv(wq);
-
-	return cv->inited ? (cv->waiters != 0u) : 0;
-}
-
 void lkpi_waitqueue_wake(struct wait_queue_head *wq)
 {
 	struct lkpi_cv_shell *cv = lkpi_wq_cv(wq);
@@ -2222,44 +2050,6 @@ void lkpi_waitqueue_wake(struct wait_queue_head *wq)
 	 * so a spurious wake costs one loop and never a missed one. */
 	while (n-- > 0)
 		(void)osSemaphoreRelease(cv->sem);
-}
-
-/*
- * [LNX] include/linux/wait.h:44-58,169: the manual wait protocol a caller uses when
- * it wants to wait on a condition of its own rather than through wait_event(). In
- * the interface the entry is linked into the head's entry list, the waiter sets its
- * task state and calls schedule_timeout(), and wake_up() walks that list calling the
- * entries' callbacks.
- *
- * This port's wait head is a CMSIS condition shell, not an entry list: its waiters
- * are the tasks already parked in lkpi_waitq_timedwait() (the count the shell keeps),
- * and the port's schedule_timeout() is a bounded delay (linuxkpi_osdep.c). There is
- * therefore no list for these three calls to join or leave, and they are empty. The
- * consequence is recorded in the component's DIVERGENCES file: a caller that takes
- * this path waits its timeout instead of being woken early by the wake_up() its peer
- * issues, which is the interface's "no early wake" case and not a fake completion -
- * the caller's own condition is still tested after every sleep.
- */
-void
-init_waitqueue_entry(struct wait_queue_entry *wq_entry, struct task_struct *p)
-{
-	if (wq_entry == NULL)
-		return;
-	wq_entry->private = p;
-}
-
-void
-add_wait_queue(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry)
-{
-	(void)wq_head;
-	(void)wq_entry;
-}
-
-void
-remove_wait_queue(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry)
-{
-	(void)wq_head;
-	(void)wq_entry;
 }
 
 void lkpi_waitq_lock(struct wait_queue_head *wq)

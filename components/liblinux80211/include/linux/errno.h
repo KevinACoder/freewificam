@@ -51,40 +51,6 @@
 #ifndef ENOMEDIUM
 #define ENOMEDIUM 123
 #endif
-/*
- * [LNX] include/uapi/asm-generic/errno.h:33,46,104,120 (the numbers are the
- * asm-generic ones; include/linux/errno.h is the in-kernel spelling):
- * EBADE, ENOSR, ENAVAIL and EROM are the error numbers brcmfmac's firmware
- * protocol answers with (fwil.c's "invalid exchange", the flow-control ring's
- * "out of streams resources", the dongle's "not available" and "read-only
- * memory"). This platform's <asm/errno.h> has no such names, so they are stated
- * here with the interface's values, guarded like the two above.
- */
-/* [LNX] include/linux/errno.h:19: the in-kernel "this device is not ready, probe
- * again later" answer. A driver's probe returns it when a dependency has not arrived
- * (brcmfmac's platform/OF path, common.c:564); the value is the interface's. */
-#ifndef EPROBE_DEFER
-#define EPROBE_DEFER 517
-#endif
-/* [LNX] include/linux/errno.h:14: the private "a signal interrupted this sleep, the
- * caller should restart" answer. It has no public errno number because it never
- * leaves the kernel; brcmfmac's SDIO control-frame wait returns it when a pending
- * signal ended the wait (sdio.c:3281). The value is the interface's. */
-#ifndef ERESTARTSYS
-#define ERESTARTSYS 512
-#endif
-#ifndef EBADE
-#define EBADE 52
-#endif
-#ifndef ENOSR
-#define ENOSR 63
-#endif
-#ifndef ENAVAIL
-#define ENAVAIL 119
-#endif
-#ifndef EROM
-#define EROM 120
-#endif
 #endif
 
 #endif /* _LINUXKPI_LINUX_ERRNO_H_ */

@@ -43,7 +43,6 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mmc/card.h>
-#include <linux/mmc/core.h>
 #include <linux/mmc/host.h>
 
 #include "lkpi_sdio_backend.h"
@@ -138,11 +137,6 @@ struct lkpi_sdio_card {
 	osMutexId_t			claim;
 	osThreadId_t			pump;
 	osThreadId_t			claim_owner;
-	/* Linux' mmc claim is recursive for the claiming task (claim_cnt); the
-	 * firmware download path relies on it (brcmf_sdio_download_firmware
-	 * claims, then brcmf_sdiod_ramrw claims again for every window).  A plain
-	 * non-recursive mutex deadlocks that path on this port. */
-	unsigned int			claim_depth;
 	uint64_t			claim_since_ns;
 	osSemaphoreId_t			pump_req;
 	osSemaphoreId_t			pump_done;
@@ -166,12 +160,6 @@ struct lkpi_sdio_card {
 	bool				pump_prio_normal;
 	unsigned int			pump_prio_level;	/* 0 below .. 4 realtime */
 	bool				pump_drain;
-	/* polled-dispatch: run a function's handler once per cycle even when the
-	 * card's CCCR pending word is quiet.  A card that signals its function
-	 * interrupt only as a DAT1 level (this 8189FTV does) leaves the pending
-	 * word at zero, so waiting for it starves the handler - the driver then
-	 * reads the receive FIFO only when some other path happens to call it. */
-	bool				pump_force_dispatch;
 	/* when the last cycle that moved bytes finished (the hot hold's stamp) */
 	uint64_t			pump_hot_ns;
 	/* always-on accounting of the bytes the splitter moved, by direction.
@@ -1052,13 +1040,6 @@ sdio_claim_host(struct sdio_func *func)
 
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
-	/* the same task may claim again (Linux counts the nesting), and only the
-	 * outermost release gives the bus back */
-	if (c->claim_owner == osThreadGetId()) {
-		c->claim_depth++;
-		lkpi_sdio_stats.claims++;
-		return;
-	}
 	t0 = lkpi_sdio_census_now();
 	/* announced before the wait, so the pump can see the request and stand aside
 	 * for a turn rather than re-taking the bus ahead of this caller */
@@ -1068,7 +1049,6 @@ sdio_claim_host(struct sdio_func *func)
 	lkpi_sdio_census_note_claim_wait(t0, lkpi_sdio_census_now());
 	lkpi_sdio_census_note_claim_hold(lkpi_sdio_census_now());
 	c->claim_owner = osThreadGetId();
-	c->claim_depth = 1u;
 	c->claim_since_ns = lkpi_sdio_census_now();
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
@@ -1081,16 +1061,6 @@ sdio_release_host(struct sdio_func *func)
 
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
-	/* a release from a thread that does not hold the claim is a defect in
-	 * the caller, not a bus operation; do not hand the bus to a stranger */
-	if (c->claim_owner != osThreadGetId())
-		return;
-	if (c->claim_depth > 1u) {
-		c->claim_depth--;
-		lkpi_sdio_stats.releases++;
-		return;
-	}
-	c->claim_depth = 0u;
 	c->host.claimed = false;
 	c->claim_owner = NULL;
 	c->claim_since_ns = 0u;
@@ -1445,19 +1415,8 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 	if (incr)
 		base |= LKPI_SDIO_BE_F_INCR;
 
-	/*
-	 * A request that is exactly one (or more) blocks goes through block
-	 * mode even when it would also fit the byte-mode ceiling: this card
-	 * (BCM43362) rejects a byte-mode CMD53 whose count equals its 64-byte
-	 * block size with an R5 "out of range" and sends no data, while the
-	 * same transfer as one block completes.  Linux's helper would pick
-	 * byte mode for size == cur_blksize; the vendor's own driver switches
-	 * to block mode at 64 bytes, and that is the shape this port must
-	 * speak.  The byte-mode chunk path still covers everything that is
-	 * not a whole block.
-	 */
-	if (func->card->cccr.multi_block != 0 && func->cur_blksize != 0u &&
-	    (size > sdio_max_byte_size(func) || size >= func->cur_blksize)) {
+	if (func->card->cccr.multi_block != 0 &&
+	    size > sdio_max_byte_size(func) && func->cur_blksize != 0u) {
 		max_blocks = func->card->host->max_blk_count;
 		if (max_blocks > LKPI_SDIO_EXT_MAX_BLOCKS)
 			max_blocks = LKPI_SDIO_EXT_MAX_BLOCKS;
@@ -1482,12 +1441,6 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			lkpi_sdio_census_note_ext(write, true, bytes, t0,
 			    lkpi_sdio_census_now());
 			lkpi_sdio_stats.io_extended++;
-			if (!write) {
-				lkpi_sdio_stats.ext_rx++;
-				lkpi_sdio_stats.ext_rx_bytes += bytes;
-				if (st != 0)
-					lkpi_sdio_stats.ext_rx_fail++;
-			}
 			if (st != 0) {
 				lkpi_sdio_stats.errors++;
 				return lkpi_sdio_errno(st);
@@ -1519,12 +1472,6 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 		lkpi_sdio_census_note_ext(write, false, n, t0,
 		    lkpi_sdio_census_now());
 		lkpi_sdio_stats.io_extended++;
-		if (!write) {
-			lkpi_sdio_stats.ext_rx++;
-			lkpi_sdio_stats.ext_rx_bytes += n;
-			if (st != 0)
-				lkpi_sdio_stats.ext_rx_fail++;
-		}
 		if (st != 0) {
 			lkpi_sdio_stats.errors++;
 			return lkpi_sdio_errno(st);
@@ -1936,338 +1883,6 @@ lkpi_sdio_has_handler(void)
 	return false;
 }
 
-/* --- the card-side interrupt probe ---------------------------------------
- *
- * The host's counters say whether the line was armed and whether the ISR ran;
- * these reads say whether the card ever wanted to interrupt.  They run here,
- * under the claim, because the previous round's attempt to read the card from
- * the diagnostic path (a thread that does not own the bus) ended in a HardFault
- * with a torn bus state.  Reads only: HIMR, HISR, CCCR IEN/pending and the
- * receive length are all status, and reading them does not clear the card's
- * pending event.
- *
- * The cadence is one probe a second: the probe is an instrument, not a service
- * path, and the four-byte HIMR is four single-byte CMD52s on this card.
- */
-#define LKPI_SDIO_PROBE_PERIOD_NS	1000000000ull	/* one second */
-
-static struct lkpi_sdio_card_probe lkpi_sdio_card_probe_state;
-static bool lkpi_sdio_card_probe_on;
-/* The fast window: a shorter period and a range kept for the transmit-side
- * counters, so a firmware that takes a frame and returns its page inside one
- * poll interval is still visible. */
-static bool lkpi_sdio_card_probe_fast;
-static unsigned int lkpi_sdio_card_probe_fast_ms;
-
-void
-lkpi_sdio_card_probe_set(bool on)
-{
-
-	lkpi_sdio_card_probe_on = on;
-}
-
-bool
-lkpi_sdio_card_probe_enabled(void)
-{
-
-	return lkpi_sdio_card_probe_on;
-}
-
-void
-lkpi_sdio_card_probe_fast_set(bool on, unsigned int period_ms)
-{
-
-	if (on && (period_ms == 0u))
-		period_ms = 20u;
-	lkpi_sdio_card_probe_fast = on;
-	lkpi_sdio_card_probe_fast_ms = period_ms;
-	if (on) {
-		/* a new window: the previous range says nothing about this one */
-		lkpi_sdio_card_probe_state.fast_period_ms = period_ms;
-		lkpi_sdio_card_probe_state.fast_samples = 0u;
-		lkpi_sdio_card_probe_state.fast_hisr_or = 0u;
-		lkpi_sdio_card_probe_state.fast_hisr_changes = 0u;
-		lkpi_sdio_card_probe_state.fast_rxl_max = 0u;
-		lkpi_sdio_card_probe_state.fast_txpg_changed = 0u;
-		lkpi_sdio_card_probe_state.fast_hmefr_or = 0u;
-		lkpi_sdio_card_probe_state.fast_box0_last = 0u;
-		lkpi_sdio_card_probe_state.fast_box0_seen = 0u;
-	}
-}
-
-bool
-lkpi_sdio_card_probe_fast_enabled(void)
-{
-
-	return lkpi_sdio_card_probe_fast;
-}
-
-void
-lkpi_sdio_card_probe_get(struct lkpi_sdio_card_probe *out)
-{
-
-	if (out == NULL)
-		return;
-	*out = lkpi_sdio_card_probe_state;
-}
-
-static bool
-lkpi_sdio_card_read(unsigned int func, unsigned int addr, unsigned int *word,
-		    unsigned int bytes)
-{
-	unsigned int n;
-	unsigned int v = 0u;
-
-	for (n = 0u; n < bytes; n++) {
-		u8 b = 0u;
-		int st = lkpi_sdio_direct(func, addr + n, false, &b);
-
-		if (st != 0)
-			return false;
-		v |= (unsigned int)b << (8u * n);
-	}
-	*word = v;
-	return true;
-}
-
-static bool
-lkpi_sdio_card_read_bytes(unsigned int func, unsigned int addr, u8 *buf,
-			  unsigned int bytes)
-{
-	unsigned int n;
-
-	for (n = 0u; n < bytes; n++) {
-		int st = lkpi_sdio_direct(func, addr + n, false, &buf[n]);
-
-		if (st != 0)
-			return false;
-	}
-	return true;
-}
-
-/*
- * The fast window's one sample: the transmit-side counters only, four reads,
- * so the pump can afford it at a rate that sees a transient.  The firmware
- * takes a frame and returns its page inside one second on any working card,
- * which is why the one-second probe cannot tell "never fetched" from
- * "fetched and returned": this keeps the range instead of the last value.
- */
-static unsigned int lkpi_sdio_card_probe_lean_count;
-
-static void
-lkpi_sdio_card_probe_tx_sample(void)
-{
-	struct lkpi_sdio_card_probe p = lkpi_sdio_card_probe_state;
-	unsigned int oqt = 0u, hisr = 0u, rxl = 0u, hmefr = 0u, box0 = 0u;
-	unsigned int ok = 0u, fails = 0u;
-	unsigned int prev_hisr = p.hisr;
-	unsigned int i;
-	u8 page[8];
-
-	(void)memset(page, 0, sizeof(page));
-	if (lkpi_sdio_card_read_bytes(1u, 0x20u, page, 8u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x2au, &oqt, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x18u, &hisr, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x1cu, &rxl, 2u))
-		ok++;
-	else
-		fails++;
-	/* the firmware's doorbell: at 20 ms a command the firmware reads within
-	 * a millisecond is still visible, and one it never reads stays visible */
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01ccu, &hmefr, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01d0u, &box0, 4u))
-		ok++;
-	else
-		fails++;
-
-	p.ok += ok;
-	p.fails += fails;
-	p.stamp_ns = lkpi_sdio_census_now();
-	if (fails != 0u) {
-		/* a refused sample is not a reading: do not fold it in */
-		lkpi_sdio_card_probe_state = p;
-		return;
-	}
-
-	if (p.fast_samples == 0u) {
-		for (i = 0u; i < 4u; i++) {
-			p.fast_txpg_min[i] = page[i * 2u];
-			p.fast_txpg_max[i] = page[i * 2u];
-		}
-		p.fast_oqt_min = oqt;
-		p.fast_oqt_max = oqt;
-	} else {
-		for (i = 0u; i < 4u; i++) {
-			if (page[i * 2u] < p.fast_txpg_min[i])
-				p.fast_txpg_min[i] = page[i * 2u];
-			if (page[i * 2u] > p.fast_txpg_max[i])
-				p.fast_txpg_max[i] = page[i * 2u];
-			if (p.fast_txpg_min[i] != p.fast_txpg_max[i])
-				p.fast_txpg_changed = 1u;
-		}
-		if (oqt < p.fast_oqt_min)
-			p.fast_oqt_min = oqt;
-		if (oqt > p.fast_oqt_max)
-			p.fast_oqt_max = oqt;
-	}
-	if (hisr != prev_hisr)
-		p.fast_hisr_changes++;
-	p.fast_hisr_or |= hisr;
-	if (rxl > p.fast_rxl_max)
-		p.fast_rxl_max = rxl;
-	p.fast_hmefr_or |= hmefr;
-	if (box0 != 0u) {
-		p.fast_box0_last = box0;
-		p.fast_box0_seen = 1u;
-	}
-	p.fast_samples++;
-
-	/* the "latest" fields stay the card's current answer */
-	p.txpg_hi = page[0];
-	p.txpg_mid = page[2];
-	p.txpg_lo = page[4];
-	p.txpg_pub = page[6];
-	p.oqt_free = oqt;
-	p.hisr = hisr;
-	p.rx_req_len = rxl;
-	lkpi_sdio_card_probe_state = p;
-}
-
-static void
-lkpi_sdio_card_probe_run(void)
-{
-	struct lkpi_sdio_card_probe p;
-	unsigned int himr = 0u, hisr = 0u, ien = 0u, pend = 0u, rxl = 0u;
-	unsigned int oqt = 0u, cr = 0u, txp = 0u, mcufwdl = 0u, rqpn = 0u;
-	unsigned int hmefr = 0u, msr = 0u, txdma = 0u;
-	unsigned int ok = 0u, fails = 0u;
-	unsigned int i;
-	u8 txpg[8];
-	u8 box[16];
-	u8 boxex[16];
-
-	/* fresh values every probe: a refused read must not leave the previous
-	 * answer standing, or "the register says zero" and "the read failed"
-	 * would read the same on the console */
-	if (lkpi_sdio_card_read(1u, 0x14u, &himr, 4u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x18u, &hisr, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x1cu, &rxl, 2u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(0u, 0x04u, &ien, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(0u, 0x05u, &pend, 1u))
-		ok++;
-	else
-		fails++;
-	/* The transmit side: the page counts the vendor's write path waits on,
-	 * and the outstanding-queue space.  Both are status reads. */
-	(void)memset(txpg, 0, sizeof(txpg));
-	if (lkpi_sdio_card_read_bytes(1u, 0x20u, txpg, 8u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, 0x2au, &oqt, 1u))
-		ok++;
-	else
-		fails++;
-	/* The WLAN registers live behind the IOREG device: the command address
-	 * is (8 << 13) | register.  REG_CR = 0x0100, REG_TXPAUSE = 0x0522. */
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0100u, &cr, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0522u, &txp, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0080u, &mcufwdl, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0200u, &rqpn, 4u))
-		ok++;
-	else
-		fails++;
-	/*
-	 * The firmware's host doorbell.  REG_HMETFR bit n is set while the
-	 * firmware has not read H2C box n (the vendor polls it as "0x1cc=0
-	 * means the H2C is done by the FW"), and the box words are the payload
-	 * the host wrote: a box that reads back as the command the driver sent
-	 * says the write landed, an all-zero box says it did not.
-	 */
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01ccu, &hmefr, 1u))
-		ok++;
-	else
-		fails++;
-	(void)memset(box, 0, sizeof(box));
-	if (lkpi_sdio_card_read_bytes(1u, (8u << 13) | 0x01d0u, box, 16u))
-		ok++;
-	else
-		fails++;
-	(void)memset(boxex, 0, sizeof(boxex));
-	if (lkpi_sdio_card_read_bytes(1u, (8u << 13) | 0x01f0u, boxex, 16u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0102u, &msr, 1u))
-		ok++;
-	else
-		fails++;
-	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0210u, &txdma, 4u))
-		ok++;
-	else
-		fails++;
-
-	p = lkpi_sdio_card_probe_state;
-	p.ok += ok;
-	p.fails += fails;
-	p.himr = himr;
-	p.hisr = hisr;
-	p.cccr_ien = ien;
-	p.cccr_pending = pend;
-	p.rx_req_len = rxl;
-	p.txpg_hi = txpg[0];
-	p.txpg_mid = txpg[2];
-	p.txpg_lo = txpg[4];
-	p.txpg_pub = txpg[6];
-	p.oqt_free = oqt;
-	p.reg_cr = cr;
-	p.reg_txpause = txp;
-	p.reg_mcufwdl = mcufwdl;
-	p.reg_rqpn = rqpn;
-	p.hmefr = hmefr;
-	for (i = 0u; i < sizeof(box); i++)
-		p.hmebox[i] = box[i];
-	for (i = 0u; i < sizeof(boxex); i++)
-		p.hmebox_ex[i] = boxex[i];
-	p.reg_msr = msr;
-	p.txdma_status = txdma;
-	p.stamp_ns = lkpi_sdio_census_now();
-	lkpi_sdio_card_probe_state = p;
-}
-
 /*
  * One poll cycle, on the pump thread: claim the bus, read the card's pending
  * word, hand each pending function to its handler with the claim still held (the
@@ -2276,7 +1891,7 @@ lkpi_sdio_card_probe_run(void)
  * whether the cycle moved any bytes - the adaptive cadence's progress signal.
  */
 static bool
-lkpi_sdio_pump_cycle(bool card_irq)
+lkpi_sdio_pump_cycle(void)
 {
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 	u8 pending = 0;
@@ -2298,28 +1913,6 @@ lkpi_sdio_pump_cycle(bool card_irq)
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 
-	/* The card's own registers: once a second normally; inside the fast
-	 * window at its own period, with a full reading folded in every fifty
-	 * samples so the doorbell and the MAC readbacks keep their cadence. */
-	if (lkpi_sdio_card_probe_on) {
-		uint64_t period = lkpi_sdio_card_probe_fast ?
-		    ((uint64_t)lkpi_sdio_card_probe_fast_ms * 1000000ull) :
-		    LKPI_SDIO_PROBE_PERIOD_NS;
-
-		if ((lkpi_sdio_card_probe_state.stamp_ns == 0u) ||
-		    (t1 - lkpi_sdio_card_probe_state.stamp_ns >= period)) {
-			if (!lkpi_sdio_card_probe_fast) {
-				lkpi_sdio_card_probe_run();
-			} else {
-				lkpi_sdio_card_probe_tx_sample();
-				if (++lkpi_sdio_card_probe_lean_count >= 50u) {
-					lkpi_sdio_card_probe_lean_count = 0u;
-					lkpi_sdio_card_probe_run();
-				}
-			}
-		}
-	}
-
 	/*
 	 * One round dispatches the functions the card reports pending. With
 	 * drain-to-empty on, a round that saw work is followed by another look
@@ -2330,47 +1923,18 @@ lkpi_sdio_pump_cycle(bool card_irq)
 	 */
 	for (;;) {
 		lkpi_sdio_stats.pump_polls++;
-		lkpi_sdio_stats.pending_reads++;
 		if (lkpi_sdio_be_irq_pending(&pending) != 0) {
 			lkpi_sdio_stats.errors++;
 			err = true;
 			break;
 		}
-		if (pending != 0u)
-			lkpi_sdio_stats.pending_nonzero++;
-		if (pending == 0u) {
-			/*
-			 * The host's DAT1 assertion is the authoritative "look".
-			 * The CCCR pending word is optional, and this card does
-			 * not reflect its function interrupt there: a card
-			 * interrupt with a quiet word still runs the claimed
-			 * handlers once, and each reads its own status word.
-			 * Polled dispatch extends the same rule to a boot with no
-			 * card interrupt at all.
-			 */
-			if (card_irq || c->pump_force_dispatch) {
-				for (i = 1u;
-				     i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS;
-				     i++) {
-					if (c->func[i].irq_handler != NULL) {
-						lkpi_sdio_stats.callbacks++;
-						lkpi_sdio_stats.dispatch_look++;
-						lkpi_sdio_census_note_dispatch();
-						busy = true;
-						lkpi_sdio_pump_stage_state = "handler";
-						c->func[i].irq_handler(&c->func[i]);
-						lkpi_sdio_pump_stage_state = "pending";
-					}
-				}
-			}
+		if (pending == 0u)
 			break;
-		}
 		for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 			if ((pending & (1u << i)) == 0)
 				continue;
 			if (c->func[i].irq_handler != NULL) {
 				lkpi_sdio_stats.callbacks++;
-				lkpi_sdio_stats.dispatch_pending++;
 				lkpi_sdio_census_note_dispatch();
 				busy = true;
 				lkpi_sdio_pump_stage_state = "handler";
@@ -2383,7 +1947,6 @@ lkpi_sdio_pump_cycle(bool card_irq)
 			}
 		}
 		rounds++;
-		card_irq = false;
 		if ((!c->pump_drain) || (rounds >= LKPI_SDIO_DRAIN_MAX_ROUNDS))
 			break;
 	}
@@ -2412,7 +1975,6 @@ lkpi_sdio_pump_entry(void *arg)
 	(void)arg;
 	for (;;) {
 		bool requested;
-		bool card_irq;
 		bool progress = false;
 		unsigned int wait_ms;
 
@@ -2425,10 +1987,8 @@ lkpi_sdio_pump_entry(void *arg)
 		 */
 		wait_ms = c->pump_irq ? LKPI_SDIO_PUMP_IDLE_MS : c->pump_period_ms;
 		requested = osSemaphoreAcquire(c->pump_req, wait_ms) == osOK;
-		card_irq = c->irq_wake;
 		if (c->irq_wake) {
 			c->irq_wake = false;
-			lkpi_sdio_stats.irq_wakes++;
 			lkpi_sdio_census_note_wake_irq();
 		} else {
 			lkpi_sdio_census_note_wake(requested, wait_ms);
@@ -2457,7 +2017,7 @@ lkpi_sdio_pump_entry(void *arg)
 		 * handler: the re-arm below follows the cycle, and a masked line that
 		 * nobody re-arms would strand the card's events. */
 		if (lkpi_sdio_has_handler() || c->pump_irq)
-			progress = lkpi_sdio_pump_cycle(card_irq);
+			progress = lkpi_sdio_pump_cycle();
 		else
 			lkpi_sdio_pump_stage_state = "-";
 		/*
@@ -2515,9 +2075,6 @@ lkpi_sdio_pump_notify(void)
 	if (!c->pump_running)
 		return;
 	c->irq_wake = true;
-	/* the ISR-to-engine link of the wake chain (see lkpi_sdio_stats): counted
-	 * here, at the one place every backend's card upcall lands */
-	lkpi_sdio_stats.card_notify++;
 	lkpi_sdio_census_note_irq_notify();
 	lkpi_sdio_census_note_irq_stamp(lkpi_sdio_census_now());
 	(void)osSemaphoreRelease(c->pump_req);
@@ -2629,20 +2186,6 @@ lkpi_sdio_pump_drain_set(bool on)
 {
 
 	lkpi_sdio_card_state.pump_drain = on;
-}
-
-void
-lkpi_sdio_pump_force_dispatch_set(bool on)
-{
-
-	lkpi_sdio_card_state.pump_force_dispatch = on;
-}
-
-bool
-lkpi_sdio_pump_force_dispatch_get(void)
-{
-
-	return lkpi_sdio_card_state.pump_force_dispatch;
 }
 
 bool
@@ -2808,17 +2351,7 @@ static int
 lkpi_sdio_probe(struct sdio_driver *drv)
 {
 	unsigned int i;
-	int claimed_any = 0;
 
-	/*
-	 * The interface's SDIO bus probes the driver once per matching function;
-	 * a driver may decline one and claim another.  brcmfmac is the case that
-	 * makes this visible: its function-1 probe is a deliberate no-op success
-	 * ("consume func num 1") and the real probe runs for function 2.  This
-	 * loop used to return after the first successful function, so the engine
-	 * reported the driver attached while the real probe had never run - and
-	 * wlan0 never appeared.
-	 */
 	for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 		struct sdio_func *f = &lkpi_sdio_card_state.func[i];
 		const struct sdio_device_id *id;
@@ -2833,13 +2366,13 @@ lkpi_sdio_probe(struct sdio_driver *drv)
 		if (ret == 0) {
 			lkpi_sdio_card_state.claimed[i] = true;
 			lkpi_sdio_stats.probes++;
-			claimed_any = 1;
 			lkpi_printf(ULOG_INFO_LEVEL,
 			    "sdiokpi: '%s' claimed %04x:%04x function %u\n",
 			    drv->name, f->vendor, f->device, f->num);
+			return 0;
 		}
 	}
-	return claimed_any ? 0 : -ENODEV;
+	return -ENODEV;
 }
 
 int
@@ -2895,104 +2428,6 @@ sdio_set_host_pm_flags(struct sdio_func *func, mmc_pm_flag_t flags)
 		return -EINVAL;
 	func->card->host->pm_flags = flags;
 	return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* the MMC request and tuning-hold entry points                        */
-/* ------------------------------------------------------------------ */
-
-/*
- * [LNX] include/linux/mmc/core.h:180 (drivers/mmc/core/core.c's
- * mmc_wait_for_req): the wait a client uses when it builds the request itself.
- * The engine moves data through the backend seam one buffer at a time and has no
- * request queue, no completion callback and no host-ops table, so it cannot
- * execute an mmc_request.
- *
- * The call is not reachable from a compiled driver: brcmfmac enters its
- * scatter-gather path only when host->max_segs > 1 (bcmsdh.c:765), and this
- * engine reports one segment (lkpi_sdio_build_functions), so the driver issues
- * each transfer through sdio_memcpy_*(). The answer is therefore an error, and
- * it is recorded where the caller reads it: the driver takes
- * `mc->error ? mc->error : md->error` (bcmsdh.c:353), so leaving the two zero
- * would report a transfer that never happened as successful.
- */
-void
-mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
-{
-	(void)host;
-	if (mrq == NULL)
-		return;
-	if (mrq->cmd != NULL)
-		mrq->cmd->error = -EOPNOTSUPP;
-	if (mrq->data != NULL)
-		mrq->data->error = -EOPNOTSUPP;
-}
-
-/*
- * [LNX] include/linux/mmc/core.h:186 (mmc_set_data_timeout): derive the data
- * timeout from the card's CSD/EXT_CSD timing values. The port's card record
- * carries neither table - the backend reports the card's identity and block
- * geometry, not its timing descriptors - and the only caller is the
- * scatter-gather path above, which never runs here. The timeout the engine does
- * use lives in its own seam. The function keeps the interface's signature and
- * leaves the request's timeout fields at zero, which is the value the interface
- * itself uses for "no timeout setting".
- */
-void
-mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card)
-{
-	(void)data;
-	(void)card;
-}
-
-/*
- * [LNX] include/linux/mmc/core.h:184 (mmc_hw_reset): reset the card through the
- * host controller. The engine has no reset operation in its seam, and the card
- * on this board is behind a controller that can only be reset as a bus (the
- * board's SDIO power is shared with the socket) - neither is a card reset the
- * driver asked for. The answer is the interface's "this host cannot" value; the
- * one caller (sdio.c:4174) ignores the return and continues its own bus-down
- * sequence, which is what it would do after a reset that failed.
- */
-int
-mmc_hw_reset(struct mmc_card *card)
-{
-	(void)card;
-	return -EOPNOTSUPP;
-}
-
-/*
- * [LNX] include/linux/mmc/sdio_func.h:176-180: the UHS tuning hold/disable pair.
- * In the interface they set host->retune_crc_disable and call the tuning state
- * machine, because a UHS card's bus can need an automatic retune that would
- * corrupt a command sequence the driver is in the middle of. This port's host
- * record carries no retune state and the engine never retunes (the bus runs at
- * the card's high-speed timing, not UHS), so there is nothing to disable, hold or
- * release. All four are void in the interface, so an empty body cannot be read as
- * success by a caller.
- */
-void
-sdio_retune_crc_disable(struct sdio_func *func)
-{
-	(void)func;
-}
-
-void
-sdio_retune_crc_enable(struct sdio_func *func)
-{
-	(void)func;
-}
-
-void
-sdio_retune_hold_now(struct sdio_func *func)
-{
-	(void)func;
-}
-
-void
-sdio_retune_release(struct sdio_func *func)
-{
-	(void)func;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3052,24 +2487,6 @@ lkpi_sdio_build_functions(void)
 	c->host.max_req_size = c->info.host_max_req_size != 0u ?
 	    c->info.host_max_req_size :
 	    c->info.host_max_blk_size * c->info.host_max_blk_count;
-	/*
-	 * The engine moves one buffer per transfer (the seam has one address, one
-	 * pointer and one length), so a request carries one scatterlist entry.
-	 * This is the answer a client reads before it decides to build its own
-	 * mmc_request: brcmfmac turns scatter-gather on only when max_segs > 1
-	 * (bcmsdh.c:765) and otherwise issues each transfer through
-	 * sdio_memcpy_*(). Reporting more entries than the seam can move would
-	 * make the driver build a request this engine cannot execute.
-	 *
-	 * max_seg_size is the engine's own per-transfer ceiling for the same
-	 * reason, and caps stays clear: the engine cannot power-cycle the card
-	 * alone nor detect its removal, and a capability bit would be a promise
-	 * the backend does not make. brcmfmac sets NONREMOVABLE on the host
-	 * itself after its probe (bcmsdh.c:892-897).
-	 */
-	c->host.max_segs = 1u;
-	c->host.max_seg_size = c->host.max_req_size;
-	c->host.caps = 0u;
 	c->host.ios.clock = c->info.clock_hz;
 	c->host.ios.power_mode = MMC_POWER_ON;
 	c->host.ios.bus_mode = MMC_BUSMODE_PUSHPULL;

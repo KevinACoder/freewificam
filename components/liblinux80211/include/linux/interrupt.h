@@ -102,16 +102,6 @@ typedef irqreturn_t (*irq_handler_t)(int irq, void *dev_id);
 
 /* [LNX] include/linux/interrupt.h:41-56: the flags this face names. A driver that
  * registers a shared or a one-shot line passes one of these. */
-/* [LNX] include/linux/interrupt.h:32-37: the trigger-type flags a driver passes when
- * it owns the line's configuration (an out-of-band interrupt). Values are the
- * interface's; this port's engine takes the flags and configures nothing, so they are
- * vocabulary rather than a programmed edge. */
-#define	IRQF_TRIGGER_RISING	0x00000001
-#define	IRQF_TRIGGER_FALLING	0x00000002
-#define	IRQF_TRIGGER_HIGH	0x00000004
-#define	IRQF_TRIGGER_LOW	0x00000008
-#define	IRQF_TRIGGER_MASK	(IRQF_TRIGGER_HIGH | IRQF_TRIGGER_LOW | \
-				 IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING)
 #define	IRQF_SHARED		0x00000080
 #define	IRQF_ONESHOT		0x00002000
 #define	IRQF_NO_AUTOEN		0x00004000
@@ -133,24 +123,6 @@ void	free_irq(unsigned int irq, void *dev_id);
  * there is no in-flight handler to wait for and the wait is empty.
  */
 void	synchronize_irq(unsigned int irq);
-
-/*
- * [LNX] include/linux/interrupt.h:233-241: the line mask/unmask calls and the
- * system-wake pair. brcmfmac names them on its out-of-band-interrupt path
- * (bcmsdh.c:73 masks the level-triggered line from its own handler and sdio.c:2551
- * unmasks it once the deferred work has drained it) and on its WOWL/wake path.
- * The OOB path is off on this port - the driver enables it only when its platform
- * data says the board wires one (settings->bus.sdio.oob_irq_supported, and there is
- * no platform data here) - so the bodies answer as a port with no wake-capable
- * sleep state and no line-mask seam must: they are in linuxkpi_compat.c, the mask
- * pair empty and the wake pair -EOPNOTSUPP rather than a success for an arm that
- * did not happen.
- */
-void	disable_irq_nosync(unsigned int irq);
-void	disable_irq(unsigned int irq);
-void	enable_irq(unsigned int irq);
-int	enable_irq_wake(unsigned int irq);
-int	disable_irq_wake(unsigned int irq);
 
 /* [LNX] include/linux/interrupt.h: the affinity-hint setter. The interface selects
  * between a CONFIG_SMP arm and the !CONFIG_SMP arm at include/linux/interrupt.h:407,

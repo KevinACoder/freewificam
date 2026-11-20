@@ -40,11 +40,6 @@ that way.
 | `rk3568-usb-msc` | tick usb_ehci | CherryUSB EHCI: enumerate the U-disk, block zero, round trip (identity arm on a small disk) |
 | `stm32f429-usb-msc` | tick usb_dwc2 | STM32F429 OTG_HS in full-speed host mode + CherryUSB's DWC2 port + MSC: enumerate the U disk, read block 0 / eight blocks, then write and read back one 512 B sector in the disk's last 1 MiB window; verdict `usbh: msc PASS` |
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
-| `stm32f429-rtl8189fs-probe` | tick f429_sdio_probe | the F429's SDIO socket enumerates the 8189FTV through the imported fsl card service and the ST LL host glue: vendor/device, four-bit bus, 24 MHz; `PASS PROBE` |
-| `stm32f429-rtl8189fs-attach` | tick rtl8189fs_sdio | the vendor stack attaches over the same socket: embedded firmware, MAC, wiphy + netdev, `dev_open`; `PASS ATTACH` |
-| `stm32f429-rtl8189fs-station` | tick rtl8189fs_sta | attach plus the real scan/connect, the lwIP netif and 56/1400 B ICMP both ways; `PASS ASSOCIATION`/`PASS DATA` |
-| `stm32f429-rtl8189fs-throughput` | tick rtl8189fs_sta rtl8189fs_throughput | the same join, then the report-only phase table over the same netif |
-| `stm32f429-sdcard` | tick f429_sd_card | the TF socket as a raw SD block device through the imported fsl SD stack and the ST LL host glue: identify, read block 0, write/read back/restore one 512 B block in the card's last 1 MiB window; `PASS SDCARD` |
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
 | `rk3568-iwl7260-c4` | tick pcie iwl7260_c4 | C3's attach plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: hw scan, BSS table, bench AP (C4) |

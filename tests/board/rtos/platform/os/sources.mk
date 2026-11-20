@@ -7,7 +7,6 @@
 obj-y += \
 	baremetal/printf_bind.c \
 	baremetal/libc_stubs.c \
-	baremetal/log.c \
-	baremetal/swd_console.c
+	baremetal/log.c
 
 obj-$(CONFIG_ARCH_AARCH64) += baremetal/tick.c

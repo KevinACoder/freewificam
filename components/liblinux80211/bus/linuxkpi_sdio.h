@@ -39,129 +39,7 @@ struct lkpi_sdio_stats {
 	unsigned int	callbacks;	/* IRQ handler invocations */
 	unsigned int	irq_claims;	/* function IRQs claimed */
 	unsigned int	errors;		/* transfers or polls that failed */
-	/* The read side's own account, and where a wake-up came from.  A card
-	 * whose frames stop arriving has three candidate breaks (the engine's
-	 * request, the card's interrupt, the handler's dispatch) and these
-	 * counts say which of them stopped first. */
-	unsigned int	ext_rx;		/* extended (CMD53) reads issued */
-	unsigned int	ext_rx_bytes;	/* bytes those reads asked for */
-	unsigned int	ext_rx_fail;	/* extended reads that failed */
-	unsigned int	pending_reads;	/* CCCR pending-word reads */
-	unsigned int	pending_nonzero;/* ones that reported work */
-	unsigned int	dispatch_pending;/* handlers run off the pending word */
-	unsigned int	dispatch_look;	/* handlers run off the card line */
-	/* The wake chain's own two links, which the four counts above cannot
-	 * separate: `card_notify` is the backend's interrupt upcall reaching
-	 * the engine (the controller's ISR ran and called the card callback),
-	 * and `irq_wakes` is the pump classifying a wake as that call rather
-	 * than as its own backstop timeout.  A line that is armed but never
-	 * fires leaves both at zero; a line that fires but whose wake is lost
-	 * shows `card_notify` growing with `irq_wakes` flat. */
-	unsigned int	card_notify;	/* ISR-to-engine card wake calls */
-	unsigned int	irq_wakes;	/* pump wakes classified as card events */
 };
-
-/*
- * What the card itself says, read over the bus while the pump holds the claim.
- *
- * The host's counters say whether the line was armed and whether it fired; only
- * the card's own registers say whether it ever wanted to.  HIMR is the mask the
- * driver wrote (its HAL copy and the card's are two different things), HISR is
- * the pending event the card asserts DAT1 for, CCCR IEN is what sdio_claim_irq
- * wrote, CCCR INT PENDING is the function-level word the pump dispatches on, and
- * RX0_REQ_LEN is how many bytes the card's receive FIFO holds right now.  All of
- * these are reads; none clears the card's state.
- *
- * The probe runs at most once a second, under the claim, so it neither perturbs
- * the pump's timing materially nor touches the bus from a thread that does not
- * own it.
- */
-struct lkpi_sdio_card_probe {
-	unsigned int	ok;		/* reads that completed */
-	unsigned int	fails;		/* reads refused by the bus */
-	unsigned int	himr;		/* function 1, 0x14: the card's mask */
-	unsigned int	hisr;		/* function 1, 0x18: pending events */
-	unsigned int	cccr_ien;	/* function 0, 0x04: interrupt enable */
-	unsigned int	cccr_pending;	/* function 0, 0x05: which function wants */
-	unsigned int	rx_req_len;	/* function 1, 0x1c: FIFO bytes waiting */
-	/* The card's transmit side, the two numbers the vendor's transmit path
-	 * waits on before it writes a frame: the free page count per queue
-	 * (function 1, 0x20; high/mid/low/public at bytes 0/2/4/6) and the
-	 * outstanding-queue free space (function 1, 0x2a).  A card that reports
-	 * zero here stalls every transmit before the SDIO write - the frame
-	 * never reaches the FIFO, so nothing can appear on air. */
-	unsigned int	txpg_hi;
-	unsigned int	txpg_mid;
-	unsigned int	txpg_lo;
-	unsigned int	txpg_pub;
-	unsigned int	oqt_free;
-	/* Why the card can hold a frame it has already accepted: its MAC
-	 * transmit enable (REG_CR bit 6) and its TX pause word (REG_TXPAUSE).
-	 * Both are WLAN registers behind the IOREG device, read through the
-	 * same claim as the FIFO state. */
-	unsigned int	reg_cr;
-	unsigned int	reg_txpause;
-	/* The firmware's own state and the queue page allocation: a card whose
-	 * firmware is not ready (or whose request-queue pages were never
-	 * configured) accepts frames into the FIFO and never drains them, which
-	 * looks exactly like "the transmit went nowhere". */
-	unsigned int	reg_mcufwdl;	/* 0x0080: FW download/ready state */
-	unsigned int	reg_rqpn;	/* 0x0200: request-queue page numbers */
-	/* The firmware's host doorbell.  H2C commands travel through four
-	 * message boxes; REG_HMETFR's bit n says box n has not been read by the
-	 * firmware yet (the vendor polls exactly this: "MAC_0x1cc=0 means H2C
-	 * done by FW").  The box contents say whether the host's write arrived
-	 * at all, which is the difference between a firmware that ignores the
-	 * host and a bus layer whose writes never land. */
-	unsigned int	hmefr;		/* 0x01cc: H2C boxes the FW has not read */
-	unsigned char	hmebox[16];	/* 0x01d0..0x01df: the four H2C boxes */
-	unsigned char	hmebox_ex[16];	/* 0x01f0..0x01ff: their extension words */
-	/* Two more MAC readbacks: the network type the driver set (MSR, the
-	 * low half of REG_CR's network-type field) and the transmit DMA's own
-	 * error word, which is where a FIFO overflow is reported next to the
-	 * interrupt status. */
-	unsigned int	reg_msr;	/* 0x0102: network type for port 0 */
-	unsigned int	txdma_status;	/* 0x0210: TX DMA error status */
-	/*
-	 * The same card, sampled inside the join window at a rate that can see a
-	 * transient: the free-page counts and the outstanding-queue space move
-	 * down when the firmware takes a frame and back up when it lets go, so a
-	 * one-second probe sees only the rest state.  The window keeps the range
-	 * each field covered and how often the bits changed, not every sample.
-	 */
-	unsigned int	fast_period_ms;	/* the window's sampling period */
-	unsigned int	fast_samples;	/* samples taken in the window */
-	unsigned int	fast_txpg_min[4];/* hi/mid/lo/public minima */
-	unsigned int	fast_txpg_max[4];/* ... and maxima */
-	unsigned int	fast_oqt_min;
-	unsigned int	fast_oqt_max;
-	unsigned int	fast_hisr_or;	/* every HISR bit seen in the window */
-	unsigned int	fast_hisr_changes;
-	unsigned int	fast_rxl_max;	/* largest receive FIFO offer seen */
-	unsigned int	fast_txpg_changed;/* a queue's page count moved */
-	/* The firmware's doorbell sampled by the same window: OR of the "box not
-	 * read" word, the last non-zero H2C box 0 word and whether one was ever
-	 * seen.  A box the host wrote and the firmware never read is the one
-	 * datum that tells "the firmware ignores the host" from "the write never
-	 * landed", and it lives for a few milliseconds at each command. */
-	unsigned int	fast_hmefr_or;
-	unsigned int	fast_box0_last;
-	unsigned int	fast_box0_seen;
-	uint64_t	stamp_ns;	/* when the last complete probe finished */
-};
-
-void	lkpi_sdio_card_probe_set(bool on);
-bool	lkpi_sdio_card_probe_enabled(void);
-/* Snapshot of the last probe; zeroed when no probe has completed. */
-void	lkpi_sdio_card_probe_get(struct lkpi_sdio_card_probe *out);
-/*
- * The fast window: while on, the pump's probe runs at `period_ms` instead of
- * once a second and accumulates a range for the transmit-side counters (see
- * the fast_* fields above).  Switching it off keeps the accumulated range for
- * the case to print; switching it on again starts a new window.
- */
-void	lkpi_sdio_card_probe_fast_set(bool on, unsigned int period_ms);
-bool	lkpi_sdio_card_probe_fast_enabled(void);
 
 /*
  * Bring the card up and hand it to the registered drivers: enumerate through the
@@ -259,10 +137,6 @@ bool	lkpi_sdio_pump_prio_get(void);
 void	lkpi_sdio_pump_prio_level_set(unsigned int level);
 unsigned int	lkpi_sdio_pump_prio_level_get(void);
 void	lkpi_sdio_pump_drain_set(bool on);
-/* Run a handler once per poll cycle even when the CCCR pending word is quiet
- * (cards that signal only through the DAT1 level). */
-void	lkpi_sdio_pump_force_dispatch_set(bool on);
-bool	lkpi_sdio_pump_force_dispatch_get(void);
 bool	lkpi_sdio_pump_drain_get(void);
 
 /*

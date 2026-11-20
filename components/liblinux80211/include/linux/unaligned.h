@@ -18,23 +18,4 @@
 
 #include "../../linuxkpi_core.h"
 
-/*
- * [LNX] include/linux/unaligned.h:76-83: the 24-bit big-endian load. It is the
- * only big-endian form the compiled set names (brcmfmac's P2P action-frame
- * parsing reads a three-byte value with it, p2p.c:232) and it is stated as the
- * interface states it: three byte loads shifted into a u32, which is also what
- * an unaligned-safe load means on this 32-bit target.
- */
-static __always_inline __unused u32
-__get_unaligned_be24(const u8 *p)
-{
-	return (u32)p[0] << 16 | (u32)p[1] << 8 | (u32)p[2];
-}
-
-static __always_inline __unused u32
-get_unaligned_be24(const void *p)
-{
-	return __get_unaligned_be24((const u8 *)p);
-}
-
 #endif /* _LINUXKPI_LINUX_UNALIGNED_H_ */

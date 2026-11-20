@@ -27,15 +27,8 @@ g_pfnVectors:
     .word 0
     .word xPortPendSVHandler
     .word xPortSysTickHandler
-    /* IRQ 0..48 */
-    .rept 49
-    .word Default_Handler
-    .endr
-    /* IRQ 49: SDIO.  The SDIO glue supplies the strong handler when it arms
-     * DAT1; fault.c supplies the weak stub. */
-    .word SDIO_IRQHandler
-    /* IRQ 50..76 */
-    .rept 27
+    /* IRQ 0..76 */
+    .rept 77
     .word Default_Handler
     .endr
     /* IRQ 77: OTG_HS.  The USB glue supplies the strong handler; fault.c

@@ -147,7 +147,7 @@ ARCH_INCLUDES :=
 CMSIS_COMPAT_INCLUDES := -I$(PLATFORM)/os/cmsis2/board-compat
 CMSIS_CORE_INCLUDES := -I$(CMSIS)/CMSIS/Core/Include/a-profile
 endif
-INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 $(CMSIS_COMPAT_INCLUDES) -I$(PLATFORM)/arch/$(ARCH) $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/components/liblinux80211/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/sd -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include $(CMSIS_CORE_INCLUDES) $(ARCH_INCLUDES) $(BACKEND_INCLUDES)
+INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 $(CMSIS_COMPAT_INCLUDES) -I$(PLATFORM)/arch/$(ARCH) $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/components/liblinux80211/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include $(CMSIS_CORE_INCLUDES) $(ARCH_INCLUDES) $(BACKEND_INCLUDES)
 
 # The PCIe/NVMe cases include the board driver headers directly (they are not
 # reachable through the generic drivers/ include root).
@@ -189,16 +189,6 @@ BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra -ffre
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h
 ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) $(ARCH_ASM_CFLAGS) -include $(PLATFORM)/build_defs.h $(INCLUDES)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
-# The SD card port group's flag world: the same ST HAL face as the SDIO group,
-# but without the Linux/liblinux80211 headers the WiFi port carries.  It is
-# defined outside the CONFIG_LIBLINUX80211 block because the SD card image has
-# no wireless stack; the group still needs the ST LL includes.
-SD_CARD_PORT_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
-	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc \
-	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc/CMSIS \
-	-I$(PLATFORM)/board/stm32f429-challenger/sdio \
-	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
-	-Wno-pointer-sign -Wno-unused-function -Wno-unused-variable
 PRINTF_CFLAGS :=
 
 # The lwIP core/protocol set: one list, because two images carry the stack (the
@@ -321,26 +311,6 @@ MMC_PORT_SRCS :=
 MMC_VENDOR_SRCS :=
 endif
 
-# The F429 SD card case: the imported SD card stack on the board's SDIO
-# peripheral, through the ST LL host glue.  The stack's card type is a
-# compile-time selection; the case-derived CONFIG_FSL_SDMMC_ENABLE_SD lives in
-# the generated config (kconfig-gen.py).  PIO only: the F4 host glue has no
-# DMA path.
-ifneq ($(filter f429_sd_card,$(CASES)),)
-SD_CARD_PORT_SRCS := \
-	$(PLATFORM)/board/stm32f429-challenger/sdio_board.c \
-	$(THIRD_PARTY)/stm32f4xx-hal/Src/stm32f4xx_ll_sdmmc_rename.c \
-	$(THIRD_PARTY)/fsl_sdmmc/ports/fsl_sdmmc_osa.c \
-	$(THIRD_PARTY)/fsl_sdmmc/ports/sdmmc_sd_card.c \
-	$(THIRD_PARTY)/fsl_sdmmc/ports/sdmmc_host_stm32f4_sdio.c
-SD_CARD_VENDOR_SRCS := \
-	$(THIRD_PARTY)/fsl_sdmmc/common/fsl_sdmmc_common.c \
-	$(THIRD_PARTY)/fsl_sdmmc/sd/fsl_sd.c
-else
-SD_CARD_PORT_SRCS :=
-SD_CARD_VENDOR_SRCS :=
-endif
-
 # The USB host domain (empty unless a USB consumer is selected): the imported
 # CherryUSB stack, the board's USB power/PHY/reset layer, the CMSIS-RTOS2 OSAL,
 # the first-party glue and - for storage images only - the mass-storage class
@@ -446,21 +416,11 @@ RTL8189FS_CFLAGS := $(KPI_CFLAGS) \
 # Linux face ahead of the platform's forced stdio/stdlib includes and the two
 # headers' spelling of the same attribute macros collide.
 SDIO_PORT_SRCS := $(RTL8189FS_SDIO_SRCS)
-RTL8189FS_SDIO_CFLAGS := $(if $(filter 1,$(CONFIG_BOARD_STM32F429_CHALLENGER)),-I$(THIRD_PARTY)/stm32f4xx-hal/Inc/CMSIS) \
-	$(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
+RTL8189FS_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-I$(LIB8)/include -I$(LIB8)/include/linux80211 -I$(LIB8)/bus -I$(LIB8) \
 	-I$(THIRD_PARTY)/fsl_sdmmc/sdio \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 	-Wno-pointer-sign -Wno-unused-function -Wno-unused-variable
-
-# The F429 SDIO port's own flag world: the ST LL driver/device headers, the
-# board's minimal HAL configuration, and the controller's part number.
-ifeq ($(CONFIG_BOARD_STM32F429_CHALLENGER),1)
-RTL8189FS_SDIO_CFLAGS += -DSTM32F429xx \
-	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc \
-	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc/CMSIS \
-	-I$(PLATFORM)/board/stm32f429-challenger/sdio
-endif
 
 # The third vendored driver: rtw89 (RTL8851BU, USB).  Its own include root and
 # feature face, and it is a wireless driver like iwlwifi (same stack, same
@@ -515,23 +475,6 @@ RTL8XXXU_CFLAGS := $(S0_CFLAGS) \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
 
-# The sixth vendored driver: brcmfmac (BCM43362 / AP6181, SDIO FullMAC).
-# Its source list is the brcm80211 import's own sources.mk (24 units under the
-# face); the driver's kbuild adds `-I $(src) -I $(src)/../include`, which is
-# brcmfmac/ and the brcm80211 include/ directory here.  S1b compiles it against
-# the full inventory face (S0_CFLAGS) because the driver is a cfg80211 consumer
-# and the measurement must not depend on an image profile.
-BRCMFMAC_DIR := $(ROOT)/wireless-drivers/brcmfmac
-$(eval $(call component_sources,$(BRCMFMAC_DIR),drv,BRCMFMAC_IMPL))
-
-BRCMFMAC_CFLAGS := $(S0_CFLAGS) \
-	-I$(BRCMFMAC_DIR)/brcmfmac -I$(BRCMFMAC_DIR)/include \
-	-include $(BRCMFMAC_DIR)/driver_config.h \
-	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
-	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
-	-Wno-override-init -Wno-maybe-uninitialized -Wno-unused-function \
-	-Wno-unused-variable -Wno-pointer-sign
-
 S1_CFLAGS := $(STACK_FACE_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
@@ -559,10 +502,6 @@ else ifeq ($(S1_DRIVER),rtl8xxxu)
 S1_TU_SET := $(RTL8XXXU_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(RTL8XXXU_CFLAGS)
 S1_DRIVER_TAG := rtl8xxxu
-else ifeq ($(S1_DRIVER),brcmfmac)
-S1_TU_SET := $(BRCMFMAC_IMPL_SRCS)
-S1_DRIVER_CFLAGS := $(BRCMFMAC_CFLAGS)
-S1_DRIVER_TAG := brcmfmac
 else
 S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(S1_CFLAGS)
@@ -631,7 +570,7 @@ KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list
 # itself is wl80211.mk's (WL80211_CASES), defined before this point.
-CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES) $(SDIO_PORT_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 ifeq ($(ARCH),armv7m)
 APP_CLOCK_SRC := $(LINE)/app/port/clock_cm4.c
@@ -654,8 +593,7 @@ PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
 	$(BACKEND_FIRST_SRCS)
-VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(SD_CARD_VENDOR_SRCS) \
-	$(BACKEND_VENDOR_SRCS)
+VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)
 
 TARGET := $(BUILD)/rtos-$(BACKEND)
@@ -665,7 +603,7 @@ FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
 	$(KPI_ALL_SRCS) $(WL80211_ALL_SRCS) $(SDIO_PORT_SRCS) \
-	$(SD_CARD_PORT_SRCS) $(RTL8189FS_OBS_PORT_SRCS)
+	$(RTL8189FS_OBS_PORT_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 ifeq ($(ARCH),armv7m)
@@ -884,7 +822,6 @@ $(FLAG_STAMP): FORCE $(CONFIG_FILE)
 	printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'asm: $(ASM_CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' \
 		'usb: $(USB_CFLAGS)' 'kpi: $(KPI_CFLAGS)' \
 		'wl: $(WL80211_STACK_CFLAGS) | $(WL80211_DRIVER_CFLAGS)' \
-		'sdcard: $(SD_CARD_PORT_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -911,22 +848,11 @@ $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s
 $(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTW88_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8XXXU_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CFLAGS))))
-$(foreach s,$(filter-out %.S,$(WL80211_BRCMFMAC_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_BRCMFMAC_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_FP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_FP_CFLAGS))))
-endif
-
-# The SDIO port group is independent of the wireless stack: the probe image
-# carries the card service and the host glue without cfg80211.  The ST LL
-# source is built through its rename wrapper (SDIO_Init collides with the fsl
-# card service's own SDIO_Init).
-$(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
-
-# The SD card port group, when the image carries it.
-ifneq ($(strip $(SD_CARD_PORT_SRCS)),)
-$(foreach s,$(filter-out %.S,$(SD_CARD_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(SD_CARD_PORT_CFLAGS))))
 endif
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
