@@ -601,6 +601,18 @@ restart:
 		if (command == SDIO_CMD_52) {
 			uint32_t a52 = (argument >> 9) & 0x1FFFFUL;
 
+			/* R5's flag byte: 0x28 is the card's "backplane not
+			 * ready" answer.  WWD never looks at it, so without this
+			 * a refused bring-up write looks like success and the
+			 * failure surfaces much later as a silent zero. */
+			if (((SDIO_RESP1 >> 8) & 0xFFUL) == 0x28UL) {
+				ap6181_trace("ap6181: cmd52 nack a=0x%05lx d=0x%02lx\n",
+					     (unsigned long)a52,
+					     (unsigned long)(argument & 0xFFUL));
+				ap6181_stats.cmd_timeouts++;
+				goto retry;
+			}
+
 			ap6181_stats.cmd52_count++;
 			ap6181_stats.last52_arg = argument;
 			ap6181_stats.last52_resp = SDIO_RESP1;
