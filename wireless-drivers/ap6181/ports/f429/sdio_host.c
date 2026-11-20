@@ -336,7 +336,6 @@ data_wait(uint32_t total)
 	 * between chunks (the card's backplane goes to sleep in long gaps and
 	 * then NAKs the bring-up accesses). */
 	if (host_rtos_get_semaphore(&s_done, 2U, WICED_TRUE) != WWD_SUCCESS) {
-		ap6181_stats.sem_timeouts++;
 		ap6181_stats.cmd_timeouts++;
 		return false;
 	}
