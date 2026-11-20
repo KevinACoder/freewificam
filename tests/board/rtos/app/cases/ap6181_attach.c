@@ -94,6 +94,43 @@ case_f429_ap6181_attach_run(void)
 	rc = wwd_management_wifi_on(WICED_COUNTRY_AUSTRALIA);
 	CASE_INFO("ap6181: wifi_on rc=%d\n", (int)rc);
 	print_stats();
+
+	{
+		uint8_t ioen = 0U;
+		uint8_t iordy = 0U;
+
+		if (ap6181_read_cccr(0x02U, &ioen) == WWD_SUCCESS &&
+		    ap6181_read_cccr(0x03U, &iordy) == WWD_SUCCESS)
+			CASE_INFO("ap6181: cccr ioen=0x%02x iordy=0x%02x\n",
+				  ioen, iordy);
+	}
+
+	{
+		uint8_t expect[64];
+		uint8_t actual[64];
+		uint32_t got = 0U;
+		wwd_result_t rrc;
+		unsigned i;
+		unsigned diffs = 0U;
+
+		rrc = host_platform_resource_read_indirect(WWD_RESOURCE_WLAN_FIRMWARE,
+							   0U, expect,
+							   sizeof(expect), &got);
+		if (rrc == WWD_SUCCESS && got == sizeof(expect)) {
+			rrc = ap6181_read_backplane(0U, actual, sizeof(actual));
+			for (i = 0U; i < sizeof(actual); i++) {
+				if (actual[i] != expect[i])
+					diffs++;
+			}
+			CASE_INFO("ap6181: socram rc=%d diffs=%u head=%02x%02x%02x%02x "
+				  "want=%02x%02x%02x%02x\n", (int)rrc, diffs,
+				  actual[0], actual[1], actual[2], actual[3],
+				  expect[0], expect[1], expect[2], expect[3]);
+		} else {
+			CASE_INFO("ap6181: socram resource rc=%d got=%lu\n",
+				  (int)rrc, (unsigned long)got);
+		}
+	}
 	if (rc != WWD_SUCCESS) {
 		CASE_ANCHOR("ap6181: FAIL wifi_on rc=%d\n", (int)rc);
 		return -1;

@@ -162,11 +162,12 @@ sdio_controller_reset(void)
 
 #define DMA_S3_COMMON		(DMA_SCR_MINC | \
 				 DMA_SCR_PSIZE_WORD | DMA_SCR_MSIZE_WORD | \
-				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_CHSEL_4)
+				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_PBURST_INC4 | \
+				 DMA_SCR_MBURST_INC4 | DMA_SCR_CHSEL_4)
 /* Single-beat DMA flow control in direct mode: the vendor's PFCTRL + INC4
  * burst + FIFO shape raises FEIF on this controller at the moment the stream
  * is enabled (EN is cleared by hardware before a byte moves). */
-#define DMA_S3_FCR_VALUE	(0UL)
+#define DMA_S3_FCR_VALUE	(0x21UL | (1UL << 2) | (3UL << 0))
 
 #define DMA_DATA_SPIN		2000000U
 
@@ -196,6 +197,27 @@ ap6181_trace(const char *fmt, ...)
 	if (n > 0)
 		uart_early_puts(buf);
 }
+
+#if defined(CONFIG_WICED_AP6181_LOG)
+/* WWD's own diagnostics go through printf, which this platform does not bind
+ * to the console (only vsnprintf/snprintf are).  Binding it here keeps the
+ * driver's log on the same early UART as its traces, for as long as the log
+ * option is on. */
+int
+printf(const char *fmt, ...)
+{
+	char buf[160];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	if (n > 0)
+		uart_early_puts(buf);
+	return n;
+}
+#endif
 
 static uint32_t
 clock_divider(uint32_t hz)
@@ -394,6 +416,42 @@ pio_tail(uint32_t total)
 	return false;
 }
 
+/* CPU read side of a CMD53: the stream's completion interrupt never comes on
+ * this board, so the words are taken straight out of the receive FIFO, at the
+ * count the stream has not consumed. */
+static bool
+pio_read_all(uint32_t total)
+{
+	uint32_t words = total / 4U;
+	uint32_t left = DMA2_S3NDTR & 0xFFFFUL;
+	uint32_t done = (left <= words) ? (words - left) : 0U;
+	uint32_t *dst = (uint32_t *)s_stage;
+	uint32_t i;
+	uint32_t spin;
+
+	for (i = done; i < words; i++) {
+		spin = FIFO_SPIN;
+		while ((SDIO_STA & STA_RXDA) == 0U && --spin != 0U) {
+			if ((SDIO_STA & STA_DATA_ERRORS) != 0U)
+				return false;
+		}
+		if (spin == 0U)
+			return false;
+		dst[i] = SDIO_FIFO;
+	}
+
+	spin = DATA_IDLE_SPIN;
+	while (spin-- != 0U) {
+		uint32_t sta = SDIO_STA;
+
+		if ((sta & STA_DATA_ERRORS) != 0U)
+			return false;
+		if ((sta & (STA_TXACT | STA_RXACT)) == 0U)
+			return true;
+	}
+	return false;
+}
+
 /* --- platform bus interface ---------------------------------------------- */
 
 wwd_result_t
@@ -552,6 +610,13 @@ restart:
 		DMA2_S3M0AR = (uint32_t)(uintptr_t)s_stage;
 		DMA2_S3NDTR = total / 4U;
 
+		if (((argument >> 28) & 0x7UL) == 2UL)
+			ap6181_trace("ap6181: f2 dir=%d len=%u arg=0x%08lx "
+				     "pa0=%lu\n", (int)direction,
+				     (unsigned)data_size,
+				     (unsigned long)argument,
+				     (unsigned long)((*(volatile uint32_t *)
+						      0x40020010UL) & 1UL));
 		s_direction = direction;
 		s_failed = false;
 		(void)host_rtos_get_semaphore(&s_done, 0U, WICED_TRUE);
@@ -565,7 +630,8 @@ restart:
 			   SDIO_CMD_CPSMEN;
 
 		if (!data_wait(total) &&
-		    !(direction == BUS_WRITE && pio_tail(total))) {
+		    !((direction == BUS_WRITE) ? pio_tail(total)
+					      : pio_read_all(total))) {
 			ap6181_trace("ap6181: dma fail dir=%d len=%lu att=%lu "
 				     "sta=0x%08lx dc=0x%08lx ndtr=%lu lisr=0x%08lx "
 				     "dma=0x%08lx\n",
@@ -595,6 +661,37 @@ restart:
 		 * head of the next chunk and shift every following byte. */
 		SDIO_DCTRL = 0U;
 		SDIO_MASK = MASK_SDIOIT;
+
+		/* In-place integrity check: read the block just written back
+		 * through the same window (no window register is touched) and
+		 * compare with the staged source. */
+		if (direction == BUS_WRITE && total >= 64U &&
+		    ap6181_stats.cmd53_isr == 6U) {
+			uint8_t saved[64];
+			uint8_t rb[64];
+			uint32_t rarg = (argument & ~0x80000000UL & ~0x1FFUL) | 1UL;
+			unsigned i;
+			unsigned diffs = 0U;
+
+			memcpy(saved, s_stage, sizeof(saved));
+			if (host_platform_sdio_transfer(BUS_READ, SDIO_CMD_53,
+							SDIO_BLOCK_MODE,
+							SDIO_64B_BLOCK, rarg,
+							(uint32_t *)rb,
+							sizeof(rb),
+							RESPONSE_NEEDED,
+							NULL) == WWD_SUCCESS) {
+				for (i = 0U; i < sizeof(rb); i++) {
+					if (rb[i] != saved[i])
+						diffs++;
+				}
+				ap6181_trace("ap6181: inplace rb rc=0 diffs=%u "
+					     "a=%02x vs b=%02x\n", diffs,
+					     saved[0], rb[0]);
+			} else {
+				ap6181_trace("ap6181: inplace rb failed\n");
+			}
+		}
 		if (direction == BUS_READ)
 			memcpy(data, s_stage, data_size);
 	} else {
@@ -650,6 +747,55 @@ retry:
 	SDIO_DCTRL = 0U;
 	SDIO_ICR = STA_ALL;
 	goto restart;
+}
+
+static wwd_result_t
+window_write(uint32_t reg, uint8_t value)
+{
+	return host_platform_sdio_transfer(BUS_WRITE, SDIO_CMD_52,
+					   SDIO_BYTE_MODE, SDIO_1B_BLOCK,
+					   (1UL << 31) | (1UL << 28) |
+					   ((reg & 0x1FFFFUL) << 9) | value,
+					   NULL, 0U, RESPONSE_NEEDED, NULL);
+}
+
+wwd_result_t
+ap6181_read_backplane(uint32_t addr, void *buf, uint16_t len)
+{
+	uint32_t argument;
+	wwd_result_t rc;
+
+	rc = window_write(0x1000CUL, (uint8_t)(addr >> 24));
+	if (rc != WWD_SUCCESS)
+		return rc;
+	rc = window_write(0x1000BUL, (uint8_t)(addr >> 16));
+	if (rc != WWD_SUCCESS)
+		return rc;
+	rc = window_write(0x1000AUL, (uint8_t)(addr >> 8));
+	if (rc != WWD_SUCCESS)
+		return rc;
+
+	argument = (1UL << 28) | (1UL << 27) | (1UL << 26) |
+		   ((addr & 0x1FFFFUL) << 9) |
+		   ((uint32_t)((len + 63U) / 64U) & 0x1FFUL);
+	return host_platform_sdio_transfer(BUS_READ, SDIO_CMD_53, SDIO_BLOCK_MODE,
+					   SDIO_64B_BLOCK, argument, (uint32_t *)buf,
+					   len, RESPONSE_NEEDED, NULL);
+}
+
+wwd_result_t
+ap6181_read_cccr(uint8_t reg, uint8_t *value)
+{
+	wwd_result_t rc;
+	uint32_t response = 0U;
+
+	rc = host_platform_sdio_transfer(BUS_READ, SDIO_CMD_52, SDIO_BYTE_MODE,
+					 SDIO_1B_BLOCK,
+					 ((uint32_t)reg & 0x1FFFFUL) << 9,
+					 NULL, 0U, RESPONSE_NEEDED, &response);
+	if (value != NULL)
+		*value = (uint8_t)(response & 0xFFUL);
+	return rc;
 }
 
 wwd_result_t
