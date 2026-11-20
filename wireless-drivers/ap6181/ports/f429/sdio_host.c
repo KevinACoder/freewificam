@@ -3,21 +3,14 @@
  * sdio_host.c - the STM32F429 SDIO host for the AP6181 (BCM43362).
  *
  * Bus shape: 400 kHz / 1-bit for enumeration, then 24 MHz / 4-bit.  Commands
- * are polled (CMD0/3/5/7/52/53); the data phase of a CMD53 is served by the
- * CPU through the SDIO FIFO, one word per write/read, with the controller's
- * status flags as the handshake.  The module's card interrupt (DAT1) stays
- * interrupt-driven: SDIOIT wakes the WWD thread, which then issues its own
- * reads.
+ * are polled (CMD0/3/5/7/52/53); the data phase of a CMD53 is carried by
+ * DMA2 stream 3 channel 4, armed from the controller's CMDREND interrupt and
+ * completed by the stream's transfer-complete interrupt.  The module's card
+ * interrupt (DAT1) stays interrupt-driven too: SDIOIT wakes the WWD thread,
+ * which then issues its own reads.
  *
- * Why the data phase is PIO in this round: the DMA stream that the vendor host
- * uses would not stay enabled on this board's controller: a stream enabled
- * with the exact CMD53 transfer configuration reads back with EN cleared, no
- * LISR flag, and NDTR untouched, with or without an SDIO command outstanding.
- * A DMA arm is a throughput question; attach, scan, join and a 20-ping data
- * plane do not need it, and a polled data phase is the deterministic shape to
- * bring them up with.
- * The staging buffer is still used for every read and for unaligned or
- * non-block-multiple writes, so a caller's pointer never reaches the FIFO.
+ * Every read is staged and every unaligned or non-block-multiple write is
+ * staged, so a caller's pointer never reaches the DMA engine directly.
  */
 
 #include <stdarg.h>
@@ -68,6 +61,7 @@
 #define SDIO_DCTRL_DTEN		(1UL << 0)
 #define SDIO_DCTRL_DTDIR_CARD	(1UL << 1)	/* card -> host (read) */
 #define SDIO_DCTRL_DTMODE_BLOCK	(1UL << 2)
+#define SDIO_DCTRL_DMAEN	(1UL << 3)
 #define SDIO_DCTRL_SDIOEN	(1UL << 11)
 
 #define STA_CCRCFAIL		(1UL << 0)
@@ -95,7 +89,16 @@
 #define STA_CMD_ERRORS		(STA_CCRCFAIL | STA_CTIMEOUT)
 #define STA_ALL			(0xFFFFFFFFUL)
 
+#define MASK_CCRCFAIL		(1UL << 0)
+#define MASK_DTIMEOUT		(1UL << 3)
+#define MASK_TXUNDERR		(1UL << 4)
+#define MASK_RXOVERR		(1UL << 5)
+#define MASK_CMDREND		(1UL << 6)
+#define MASK_CMDSENT		(1UL << 7)
+#define MASK_STBITERR		(1UL << 9)
 #define MASK_SDIOIT		(1UL << 22)
+#define MASK_DATA_ERRORS	(MASK_CCRCFAIL | MASK_DTIMEOUT | MASK_TXUNDERR | \
+				 MASK_RXOVERR | MASK_STBITERR)
 
 #define BUS_RETRIES		5U
 #define CMD_SPIN		1000000U	/* polled command, several ms */
@@ -104,8 +107,70 @@
 
 #define SDIO_STAGE_SIZE		2048U
 
+/* --- RCC ------------------------------------------------------------------ */
+
+#define RCC_BASE		0x40023800UL
+#define RCC_APB2RSTR		(*(volatile uint32_t *)(RCC_BASE + 0x0CUL))
+#define RCC_APB2ENR		(*(volatile uint32_t *)(RCC_BASE + 0x44UL))
+#define RCC_APB2_SDIO		(1UL << 11)
+
+/* A full controller reset, the way the vendor host's SDIO_DeInit/SDIO_Init
+ * pair does it.  Without it the data path carries state from the 400 kHz
+ * phase into the first 24 MHz transfer: the FIFO's own flags look idle while
+ * the block sequence never completes. */
+static void
+sdio_controller_reset(void)
+{
+	RCC_APB2ENR |= RCC_APB2_SDIO;
+	RCC_APB2RSTR |= RCC_APB2_SDIO;
+	RCC_APB2RSTR &= ~RCC_APB2_SDIO;
+	(void)RCC_APB2RSTR;
+}
+
+/* --- DMA2 stream 3 (SDIO is channel 4) ----------------------------------- */
+
+#define DMA2_BASE		0x40026400UL
+#define DMA2_LISR		(*(volatile uint32_t *)(DMA2_BASE + 0x00UL))
+#define DMA2_LIFCR		(*(volatile uint32_t *)(DMA2_BASE + 0x08UL))
+#define DMA2_S3CR		(*(volatile uint32_t *)(DMA2_BASE + 0x58UL))
+#define DMA2_S3NDTR		(*(volatile uint32_t *)(DMA2_BASE + 0x5CUL))
+#define DMA2_S3PAR		(*(volatile uint32_t *)(DMA2_BASE + 0x60UL))
+#define DMA2_S3M0AR		(*(volatile uint32_t *)(DMA2_BASE + 0x64UL))
+#define DMA2_S3FCR		(*(volatile uint32_t *)(DMA2_BASE + 0x6CUL))
+
+#define DMA2_STREAM3_FLAGS	(0x3FUL << 22)	/* LIFCR, stream 3, all five */
+#define DMA_LISR_TCIF3		(1UL << 27)
+#define DMA_LISR_TEIF3		(1UL << 25)
+#define DMA_LISR_DMEIF3		(1UL << 23)
+#define DMA_LISR_FEIF3		(1UL << 21)
+
+#define DMA_SCR_EN		(1UL << 0)
+#define DMA_SCR_DMEIE		(1UL << 1)
+#define DMA_SCR_TEIE		(1UL << 2)
+#define DMA_SCR_TCIE		(1UL << 4)
+#define DMA_SCR_PFCTRL		(1UL << 5)
+#define DMA_SCR_DIR_M2P		(1UL << 6)
+#define DMA_SCR_MINC		(1UL << 10)
+#define DMA_SCR_PSIZE_WORD	(2UL << 11)
+#define DMA_SCR_MSIZE_WORD	(2UL << 13)
+#define DMA_SCR_PL_VERY_HIGH	(3UL << 16)
+#define DMA_SCR_PBURST_INC4	(2UL << 21)
+#define DMA_SCR_MBURST_INC4	(2UL << 23)
+#define DMA_SCR_CHSEL_4		(4UL << 25)
+
+#define DMA_S3_COMMON		(DMA_SCR_MINC | \
+				 DMA_SCR_PSIZE_WORD | DMA_SCR_MSIZE_WORD | \
+				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_PBURST_INC4 | \
+				 DMA_SCR_MBURST_INC4 | DMA_SCR_CHSEL_4)
+/* FIFO mode, full threshold, as the vendor host programs it. */
+#define DMA_S3_FCR_VALUE	(0UL)	/* direct mode, no FIFO */
+
+#define DMA_DATA_SPIN		2000000U
+
 static host_semaphore_type_t s_done;
 static volatile uint32_t s_current_command;
+static volatile wwd_bus_transfer_direction_t s_direction;
+static volatile bool s_failed;
 static bool s_bus_ready;
 
 static uint8_t s_stage[SDIO_STAGE_SIZE] __attribute__((aligned(4)));
@@ -239,66 +304,51 @@ command_send(uint32_t command, uint32_t argument, bool response_needed,
  * A transmit primes the FIFO before the data path is opened: DTEN with an
  * empty FIFO is an underrun the controller reports mid-block, and the card
  * then sees a short block sequence (measured: 1000 of 1024 bytes, TXUNDERR). */
-static bool
-data_pio(wwd_bus_transfer_direction_t direction, uint32_t total,
-	 uint32_t preloaded)
+/* Arm the stream.  Called from the CMDREND interrupt, which is where the
+ * vendor host arms its own stream: the card starts its data phase on the
+ * response, and any later the FIFO is already too late. */
+static void
+dma_arm(wwd_bus_transfer_direction_t direction)
 {
-	uint32_t words = total / 4U;
-	uint32_t word;
+	uint32_t cr = DMA_S3_COMMON | DMA_SCR_EN | DMA_SCR_TCIE |
+		      DMA_SCR_TEIE | DMA_SCR_DMEIE;
 
-	if (direction == BUS_WRITE) {
-		const uint32_t *src = (const uint32_t *)s_stage;
+	if (direction == BUS_WRITE)
+		cr |= DMA_SCR_DIR_M2P;
+	DMA2_S3CR = cr;
+}
 
-		for (word = preloaded; word < words; word++) {
-			uint32_t spin = FIFO_SPIN;
-			uint32_t sta;
+/* Wait for the stream's completion interrupt and for the data path to go
+ * idle.  DCOUNT alone is not completion: returning while TXACT/RXACT is still
+ * asserted leaves the card mid-transfer and the next command is answered with
+ * an R5 error. */
+static bool
+data_wait(uint32_t total)
+{
+	uint32_t spin;
+	uint32_t sta;
 
-			do {
-				sta = SDIO_STA;
-				if ((sta & STA_DATA_ERRORS) != 0U)
-					return false;
-			} while ((sta & STA_TXFIFOF) != 0U && --spin != 0U);
-			if (spin == 0U)
-				return false;
-			SDIO_FIFO = src[word];
-		}
-	} else {
-		uint32_t *dst = (uint32_t *)s_stage;
-
-		for (word = 0U; word < words; word++) {
-			uint32_t spin = FIFO_SPIN;
-			uint32_t sta;
-
-			do {
-				sta = SDIO_STA;
-				if ((sta & STA_DATA_ERRORS) != 0U)
-					return false;
-			} while ((sta & STA_RXDA) == 0U && --spin != 0U);
-			if (spin == 0U)
-				return false;
-			dst[word] = SDIO_FIFO;
-		}
+	if (host_rtos_get_semaphore(&s_done, 50U, WICED_TRUE) != WWD_SUCCESS) {
+		ap6181_stats.cmd_timeouts++;
+		return false;
 	}
+	if (s_failed)
+		return false;
 
-	/* The transfer is done when the controller has no bytes left to move.
-	 * TXACT/RXACT are not the completion condition on this controller: a
-	 * write whose last block has been clocked out can leave TXACT asserted
-	 * with DCOUNT already zero and no error flag.  The byte count is the
-	 * condition the card and the controller agree on. */
-	{
-		uint32_t spin = DATA_IDLE_SPIN;
-
-		for (;;) {
-			uint32_t sta = SDIO_STA;
-
-			if ((sta & STA_DATA_ERRORS) != 0U)
-				return false;
-			if (SDIO_DCOUNT == 0U)
-				return true;
-			if (--spin == 0U)
-				return false;
-		}
+	spin = DMA_DATA_SPIN;
+	for (;;) {
+		sta = SDIO_STA;
+		if ((sta & STA_DATA_ERRORS) != 0U)
+			return false;
+		/* DCOUNT counts the bytes already moved, so completion is the
+		 * count reaching the transfer size, not zero. */
+		if ((sta & (STA_TXACT | STA_RXACT)) == 0U &&
+		    SDIO_DCOUNT >= total)
+			return true;
+		if (--spin == 0U)
+			return false;
 	}
+	(void)total;
 }
 
 /* --- platform bus interface ---------------------------------------------- */
@@ -310,13 +360,14 @@ host_platform_bus_init(void)
 		return WWD_SEMAPHORE_ERROR;
 
 	sdio_board_init();
+	sdio_controller_reset();
 	clock_set(AP6181_SDIO_INIT_HZ, false, true);
 
 	SDIO_ICR = STA_ALL;
 	SDIO_MASK = 0U;
 
 	sdio_board_irq_enable(true);
-	sdio_board_dma_irq_enable(false);
+	sdio_board_dma_irq_enable(true);
 	s_bus_ready = true;
 	return WWD_SUCCESS;
 }
@@ -413,7 +464,7 @@ restart:
 	}
 
 	if (command == SDIO_CMD_53) {
-		uint32_t total, words, preloaded = 0U;
+		uint32_t total;
 
 		/* The 43362's byte-mode CMD53 carries its length in the block
 		 * field, so the argument's size is the block the host will use;
@@ -429,10 +480,10 @@ restart:
 		}
 		if (total > SDIO_STAGE_SIZE)
 			return WWD_BUFFER_SIZE_SET_ERROR;
-		words = total / 4U;
 
-		/* Every write is staged: the FIFO takes words and a caller's
-		 * buffer may be unaligned, shorter than a block, or both. */
+		/* Every transfer is staged: the DMA engine needs a word count and
+		 * a caller's buffer may be unaligned, shorter than a block, or
+		 * both. */
 		if (direction == BUS_WRITE) {
 			memcpy(s_stage, data, data_size);
 			if (total > data_size)
@@ -442,51 +493,55 @@ restart:
 		ap6181_stats.last_dlen = total;
 		ap6181_stats.last_arg = argument;
 		ap6181_stats.last_cmd = (uint32_t)command;
+
 		SDIO_DTIMER = 0xFFFFFFFFUL;
 		SDIO_DLEN = total;
-		/* Both transfer kinds use the controller's block descriptor: the
-		 * card's byte-mode CMD53 is sent with the block size in its
-		 * length field (the vendor host's "dodgy hack"), so the host and
-		 * the card agree on one block of `block` bytes.  The controller's
-		 * own byte mode moved one byte and then took a data CRC error on
-		 * the 4-byte chip-clock write. */
 		SDIO_DCTRL = (block_bits(block) << 4) | SDIO_DCTRL_DTMODE_BLOCK |
-			     SDIO_DCTRL_SDIOEN |
+			     SDIO_DCTRL_DMAEN | SDIO_DCTRL_DTEN |
 			     ((direction == BUS_READ) ? SDIO_DCTRL_DTDIR_CARD : 0U);
 
-		/* A one-word transfer (a backplane register write) is primed
-		 * before the command: the card starts clocking as soon as it has
-		 * answered, and the single word would otherwise race it.  A
-		 * block transfer is fed from the response on; priming it before
-		 * the command wedges the stream on this controller. */
-		if (command_send((uint32_t)command, argument, true, false) == 0U) {
-			ap6181_stats.cmd_timeouts++;
-			goto retry;
-		}
-		/* The data path opens after the card's response.  Opening it
-		 * before the command leaves the controller's DPSM idle after the
-		 * command (measured on the 4-byte chip-clock write: DCOUNT never
-		 * moved, neither TXACT nor an error flag was set). */
-		SDIO_DCTRL |= SDIO_DCTRL_DTEN;
-		if (!data_pio(direction, total, preloaded)) {
-			ap6181_trace("ap6181: pio fail dir=%d len=%lu att=%lu "
-				     "sta=0x%08lx dc=0x%08lx pre=%lu\n",
+		/* Prepare the stream, then send the command; the CMDREND
+		 * interrupt arms it.  This is the vendor host's order. */
+		DMA2_S3CR = 0U;
+		DMA2_LIFCR = DMA2_STREAM3_FLAGS;
+		DMA2_S3FCR = DMA_S3_FCR_VALUE;
+		DMA2_S3PAR = (uint32_t)(uintptr_t)&SDIO_FIFO;
+		DMA2_S3M0AR = (uint32_t)(uintptr_t)s_stage;
+		DMA2_S3NDTR = total / 4U;
+
+		s_direction = direction;
+		s_failed = false;
+		(void)host_rtos_get_semaphore(&s_done, 0U, WICED_TRUE);
+
+		SDIO_MASK = MASK_SDIOIT | MASK_CMDREND | MASK_CMDSENT |
+			    MASK_DATA_ERRORS | MASK_DTIMEOUT | MASK_TXUNDERR |
+			    MASK_RXOVERR | MASK_STBITERR;
+		SDIO_ICR = STA_ALL;
+		SDIO_ARG = argument;
+		SDIO_CMD = (uint32_t)command | SDIO_CMD_WAITRESP_SHORT |
+			   SDIO_CMD_CPSMEN;
+
+		if (!data_wait(total)) {
+			ap6181_trace("ap6181: dma fail dir=%d len=%lu att=%lu "
+				     "sta=0x%08lx dc=0x%08lx ndtr=%lu dma=0x%08lx\n",
 				     (int)direction, (unsigned long)total,
 				     (unsigned long)attempts,
 				     (unsigned long)SDIO_STA,
 				     (unsigned long)SDIO_DCOUNT,
-				     (unsigned long)preloaded);
+				     (unsigned long)DMA2_S3NDTR,
+				     (unsigned long)ap6181_stats.dma_intrs);
+			ap6181_trace("ap6181: isr sta=0x%08lx n=%lu cmd53 isr=%lu "
+				     "cmd=%lu\n",
+				     (unsigned long)ap6181_stats.last_isr_sta,
+				     (unsigned long)ap6181_stats.sdio_intrs,
+				     (unsigned long)ap6181_stats.cmd53_isr,
+				     (unsigned long)s_current_command);
 			ap6181_stats.dma_errors++;
 			goto retry;
 		}
-		if (direction == BUS_READ) {
+		SDIO_MASK = MASK_SDIOIT;
+		if (direction == BUS_READ)
 			memcpy(data, s_stage, data_size);
-			if (total <= 8U)
-				ap6181_trace("ap6181: r4 arg=0x%08lx val=0x%08lx\n",
-					     (unsigned long)argument,
-					     (unsigned long)((const uint32_t *)
-							     s_stage)[0]);
-		}
 	} else {
 		if (command_send((uint32_t)command, argument,
 				 response_expected == RESPONSE_NEEDED,
@@ -500,8 +555,11 @@ restart:
 			ap6181_stats.cmd52_count++;
 			ap6181_stats.last52_arg = argument;
 			ap6181_stats.last52_resp = SDIO_RESP1;
-			if ((argument & 0x80000000UL) == 0UL &&
-			    ap6181_stats.cmd52_count > 90U)
+			if ((a52 >= 0x03400UL && a52 <= 0x038FFUL) ||
+			    (a52 >= 0x1000AUL && a52 <= 0x1000FUL) ||
+			    a52 == 0x00004UL || a52 == 0x00007UL ||
+			    a52 == 0x00110UL || a52 == 0x00210UL ||
+			    a52 == 0x00211UL)
 				ap6181_trace("ap6181: cmd52 %s a=0x%05lx d=0x%02lx "
 					     "resp=0x%08lx\n",
 					     ((argument & 0x80000000UL) != 0UL) ?
@@ -529,6 +587,7 @@ retry:
 wwd_result_t
 host_platform_enable_high_speed_sdio(void)
 {
+	sdio_controller_reset();
 	clock_set(AP6181_SDIO_TRANSFER_HZ, AP6181_SDIO_4BIT != 0, false);
 	SDIO_MASK = MASK_SDIOIT;
 	ap6181_stats.bus_width = AP6181_SDIO_4BIT ? 4U : 1U;
@@ -565,9 +624,40 @@ SDIO_IRQHandler(void)
 	uint32_t sta = SDIO_STA;
 
 	ap6181_stats.sdio_intrs++;
+	ap6181_stats.last_isr_sta = sta;
+
+	if ((sta & (STA_CMDREND | STA_CMDSENT)) != 0U) {
+		SDIO_ICR = STA_CMDREND | STA_CMDSENT;
+		if (s_current_command == (uint32_t)SDIO_CMD_53) {
+			ap6181_stats.cmd53_isr++;
+			dma_arm(s_direction);
+		}
+	}
+
+	if ((sta & (STA_DATA_ERRORS | STA_CTIMEOUT)) != 0U) {
+		ap6181_stats.last_err_sta = sta;
+		s_failed = true;
+		SDIO_ICR = STA_ALL;
+		(void)host_rtos_set_semaphore(&s_done, WICED_TRUE);
+		return;
+	}
 
 	if ((sta & STA_SDIOIT) != 0U) {
 		SDIO_ICR = STA_SDIOIT;
 		wwd_thread_notify_irq();
 	}
+}
+
+void
+DMA2_Stream3_IRQHandler(void)
+{
+	uint32_t lisr = DMA2_LISR;
+
+	ap6181_stats.dma_intrs++;
+	if ((lisr & (DMA_LISR_TEIF3 | DMA_LISR_DMEIF3 | DMA_LISR_FEIF3)) != 0U) {
+		ap6181_stats.last_err_sta = lisr;
+		s_failed = true;
+	}
+	DMA2_LIFCR = DMA2_STREAM3_FLAGS;
+	(void)host_rtos_set_semaphore(&s_done, WICED_TRUE);
 }

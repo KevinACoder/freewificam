@@ -48,6 +48,7 @@ struct ap6181_port_stats {
 	uint32_t cmd53_dma;	/* DMA streams started for a CMD53 */
 	uint32_t last_ndtr;	/* the stream's count at the last failure */
 	uint32_t last_err_sta;	/* the controller's flags the ISR left */
+	uint32_t last_isr_sta;
 	uint32_t cmd52_count;
 	uint32_t last52_arg;
 	uint32_t last52_resp;
