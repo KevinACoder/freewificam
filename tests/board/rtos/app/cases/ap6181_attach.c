@@ -96,6 +96,23 @@ case_f429_ap6181_attach_run(void)
 	print_stats();
 
 	{
+		uint32_t v = 0U;
+		uint8_t wm = 0U;
+
+		if (ap6181_read_backplane(0x18000020UL, &v, 4U) == WWD_SUCCESS)
+			CASE_INFO("ap6181: int_status=0x%08lx\n",
+				  (unsigned long)v);
+		if (ap6181_read_backplane(0x18000024UL, &v, 4U) == WWD_SUCCESS)
+			CASE_INFO("ap6181: int_host_mask=0x%08lx\n",
+				  (unsigned long)v);
+		if (ap6181_read_backplane(0x18000034UL, &v, 4U) == WWD_SUCCESS)
+			CASE_INFO("ap6181: func_int_mask=0x%08lx\n",
+				  (unsigned long)v);
+		if (ap6181_read_fn1(0x10008U, &wm) == WWD_SUCCESS)
+			CASE_INFO("ap6181: f2_wm=%u\n", (unsigned)wm);
+	}
+
+	{
 		uint8_t lo = 0U;
 		uint8_t hi = 0U;
 		wwd_result_t r1;
@@ -110,11 +127,14 @@ case_f429_ap6181_attach_run(void)
 	{
 		uint8_t ioen = 0U;
 		uint8_t iordy = 0U;
+		uint8_t inten = 0U;
 
 		if (ap6181_read_cccr(0x02U, &ioen) == WWD_SUCCESS &&
 		    ap6181_read_cccr(0x03U, &iordy) == WWD_SUCCESS)
 			CASE_INFO("ap6181: cccr ioen=0x%02x iordy=0x%02x\n",
 				  ioen, iordy);
+		if (ap6181_read_cccr(0x04U, &inten) == WWD_SUCCESS)
+			CASE_INFO("ap6181: cccr inten=0x%02x\n", inten);
 	}
 
 	{

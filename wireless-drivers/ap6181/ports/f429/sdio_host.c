@@ -22,6 +22,7 @@
 #include "platform/wwd_bus_interface.h"
 #include "platform/wwd_platform_interface.h"
 #include "platform/wwd_sdio_interface.h"
+#include "platform/wwd_resource_interface.h"
 #include "wwd_constants.h"
 #include "wwd_debug.h"
 
@@ -457,6 +458,8 @@ pio_read_all(uint32_t total)
 wwd_result_t
 host_platform_bus_init(void)
 {
+	ap6181_trace("ap6181: t bus_init=%lu\n",
+		     (unsigned long)host_rtos_get_time());
 	if (host_rtos_init_semaphore(&s_done) != WWD_SUCCESS)
 		return WWD_SEMAPHORE_ERROR;
 
@@ -528,6 +531,8 @@ next:
 	ap6181_stats.rca = (uint16_t)(response >> 16);
 	(void)command_send((uint32_t)SDIO_CMD_7, response & 0xFFFF0000UL, true, true);
 	(void)host_rtos_delay_milliseconds(1U);
+	ap6181_trace("ap6181: t enum=%lu\n",
+		     (unsigned long)host_rtos_get_time());
 	ap6181_stats.enumerated = 1U;
 	ap6181_stats.bus_width = 1U;
 	ap6181_stats.clock_hz = AP6181_SDIO_INIT_HZ;
@@ -612,9 +617,10 @@ restart:
 		DMA2_S3NDTR = total / 4U;
 
 		if (((argument >> 28) & 0x7UL) == 2UL)
-			ap6181_trace("ap6181: f2 dir=%d len=%u arg=0x%08lx "
+			ap6181_trace("ap6181: t f2=%lu f2 dir=%d len=%u arg=0x%08lx "
 				     "pa0=%lu d=%02x%02x%02x%02x%02x%02x%02x%02x "
 				     "%02x%02x%02x%02x%02x%02x%02x%02x\n",
+				     (unsigned long)host_rtos_get_time(),
 				     (int)direction, (unsigned)data_size,
 				     (unsigned long)argument,
 				     (unsigned long)((*(volatile uint32_t *)
@@ -835,6 +841,8 @@ ap6181_read_fn1(uint16_t reg, uint8_t *value)
 wwd_result_t
 host_platform_enable_high_speed_sdio(void)
 {
+	ap6181_trace("ap6181: t hs=%lu\n",
+		     (unsigned long)host_rtos_get_time());
 	sdio_controller_reset();
 	clock_set(AP6181_SDIO_TRANSFER_HZ, AP6181_SDIO_4BIT != 0, false);
 	SDIO_MASK = MASK_SDIOIT;
@@ -846,6 +854,8 @@ host_platform_enable_high_speed_sdio(void)
 wwd_result_t
 host_platform_bus_enable_interrupt(void)
 {
+	ap6181_trace("ap6181: t int_en=%lu\n",
+		     (unsigned long)host_rtos_get_time());
 	SDIO_MASK = MASK_SDIOIT;
 	return WWD_SUCCESS;
 }
