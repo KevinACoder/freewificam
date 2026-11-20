@@ -102,8 +102,8 @@
 
 #define BUS_RETRIES		5U
 #define CMD_SPIN		1000000U	/* polled command, several ms */
-#define FIFO_SPIN		200000U		/* one FIFO word handshake */
-#define DATA_IDLE_SPIN		2000000U	/* TXACT/RXACT release */
+#define FIFO_SPIN		20000U		/* one FIFO word handshake */
+#define DATA_IDLE_SPIN		50000U		/* TXACT/RXACT release */
 
 #define SDIO_STAGE_SIZE		2048U
 
@@ -335,7 +335,8 @@ data_wait(uint32_t total)
 	 * four-word stall is known, so a long wait only stretches the gap
 	 * between chunks (the card's backplane goes to sleep in long gaps and
 	 * then NAKs the bring-up accesses). */
-	if (host_rtos_get_semaphore(&s_done, 5U, WICED_TRUE) != WWD_SUCCESS) {
+	if (host_rtos_get_semaphore(&s_done, 2U, WICED_TRUE) != WWD_SUCCESS) {
+		ap6181_stats.sem_timeouts++;
 		ap6181_stats.cmd_timeouts++;
 		return false;
 	}
@@ -588,6 +589,10 @@ restart:
 			ap6181_stats.dma_errors++;
 			goto retry;
 		}
+		/* Close the data path and drop whatever is left in the FIFO:
+		 * a tail word that stayed behind would otherwise be sent as the
+		 * head of the next chunk and shift every following byte. */
+		SDIO_DCTRL = 0U;
 		SDIO_MASK = MASK_SDIOIT;
 		if (direction == BUS_READ)
 			memcpy(data, s_stage, data_size);
