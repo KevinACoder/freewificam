@@ -163,7 +163,7 @@ sdio_controller_reset(void)
 				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_PBURST_INC4 | \
 				 DMA_SCR_MBURST_INC4 | DMA_SCR_CHSEL_4)
 /* FIFO mode, full threshold, as the vendor host programs it. */
-#define DMA_S3_FCR_VALUE	(0UL)	/* direct mode, no FIFO */
+#define DMA_S3_FCR_VALUE	(0UL)	/* direct mode */
 
 #define DMA_DATA_SPIN		2000000U
 
@@ -310,8 +310,7 @@ command_send(uint32_t command, uint32_t argument, bool response_needed,
 static void
 dma_arm(wwd_bus_transfer_direction_t direction)
 {
-	uint32_t cr = DMA_S3_COMMON | DMA_SCR_EN | DMA_SCR_TCIE |
-		      DMA_SCR_TEIE | DMA_SCR_DMEIE;
+	uint32_t cr = DMA_S3_COMMON | DMA_SCR_EN | DMA_SCR_TCIE;
 
 	if (direction == BUS_WRITE)
 		cr |= DMA_SCR_DIR_M2P;
