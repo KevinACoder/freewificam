@@ -1575,3 +1575,43 @@ Not claimed, each with its reason:
   speed (12 Mbit/s signalling, bulk ceiling near 9.7), so the 6-7 Mbit/s UDP
   cell is the USB link being approached, not the radio; none of the four
   numbers transfers to the RK3568 line or a GT arm.
+
+## AP6181 (BCM43362) — F429 onboard module
+
+One case per rung. Anchors are the `PASS` lines; the lines around them are the
+rung's actual measurement.
+
+```
+ap6181: stage=attach
+ap6181: fw bytes=210624
+ap6181: wifi_on rc=0
+ap6181: mac=9c:b8:b4:74:5f:e1
+ap6181: PASS ATTACH
+```
+
+```
+ap6181: stage=scan
+ap6181: scan done=1 n=18 waited=100ms
+ap6181: bss0 ssid=... bssid=... ch=1 rssi=-48
+ap6181: PASS SCAN
+```
+
+```
+ap6181: stage=join
+ap6181: join rc=0
+ap6181: link wait=700ms
+ap6181: bssid=1c:a7:70:de:29:a1
+ap6181: PASS JOIN
+```
+
+```
+ap6181: stage=data
+ap6181: netif ip=192.168.99.2
+ap6181: icmp sent=20 recv=20 tx=21 buffail=0
+ap6181: PASS DATA
+```
+
+`wwd_wifi_join()` returns when the request is accepted, so a `join rc=0` line
+alone is not the rung: the link wait and the BSSID are what the case judges.
+The data rung's ICMP is also visible on the bench AP's own capture (20 echo
+requests, 20 replies).

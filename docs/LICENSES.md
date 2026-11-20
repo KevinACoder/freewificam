@@ -20,6 +20,8 @@ Per-component license registry. This is not legal advice.
 | `third-party/ulog/` | MIT | |
 | `third-party/wpa_supplicant-rtos/` | BSD-3-Clause | NXP `wpa_supplicant-rtos` `release/25.06.00` (`c21bbad`), 897 files, unmodified apart from the port patches in its `patches/`; upstream `port/` (mbedtls/KSDK glue, Apache-2.0) is **not** imported - see `PROVENANCE.md` |
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) | **tracked input**, unmodified; sha256 `5d81a600…`; source and terms in `fw/PROVENANCE.md` |
+| `wireless-drivers/ap6181/` (written here) | BSD-3-Clause | the port's own files (`ports/f429/`, `sources.mk`, `Kconfig`, cases) |
+| `wireless-drivers/ap6181/vendor/` | Cypress WICED license (proprietary; use with Cypress ICs only, no redistribution) | **not tracked**: materialized from an external WICED tree by `tools/build/wiced-tree.py`, git-ignored, sha256 manifest; see `PROVENANCE.md` and `docs/F429-AP6181.md` |
 | `components/liblinux80211/fw/rtlwifi/rtl8723bu_nic.bin` | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) | **tracked input**, unmodified; sha256 `a52b5a7b…`, 32,108 B; source and terms in `fw/PROVENANCE.md` |
 
 ## Combined products
@@ -33,6 +35,13 @@ When `components/liblinux80211/` lands the real `net/mac80211` and
 combined work regardless of the license of the parts written here. That
 boundary is the reason the component is a separate build unit and a separate
 profile family: the Realtek BSD-option profiles must never link it.
+
+The F429 AP6181 images (`stm32f429-ap6181-attach`, `-scan`, `-join`, `-data`)
+link the Cypress WICED WWD driver. They contain no GPL unit and no Linux
+wireless stack: the image gate (`make wiced-image-gate`) fails if any
+`linuxkpi`/`mac80211`/`cfg80211`/`brcmfmac` symbol appears. Because the vendor
+tree is Cypress source under the WICED license, those images are for use with
+Cypress ICs only.
 
 ## Import direction
 

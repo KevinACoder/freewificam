@@ -80,6 +80,11 @@ WICED_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	$(AP6181_VENDOR_INC) -include $(AP6181_DIR)/ports/f429/wiced_kconfig.h
 
 AP6181_ALL_SRCS := $(AP6181_PORT_SRCS) $(AP6181_VENDOR_SRC_SRCS)
+
+# The world's own gate: the image must not carry the Linux wireless stack.
+.PHONY: wiced-image-gate
+wiced-image-gate: image
+	@sh $(ROOT)/tools/build/wiced-image-gate.sh $(TARGET).elf
 AP6181_CASE_SRCS := $(foreach c,$(filter $(WICED_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 AP6181_ALL_SRCS += $(AP6181_CASE_SRCS)
 

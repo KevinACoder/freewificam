@@ -409,3 +409,22 @@ Heap/pool note: the c6 heap low-water was `free=4,157,952 min=4,157,952` of a
 therefore ample and **not** changed in this round; shrinking it is a RAM
 footprint choice, not an image-size one.  lwIP's `MEM_ALIGNMENT` stays 8: a
 move to 4 is a separate heap A/B, not a free size win.
+
+
+## AP6181 (BCM43362) profiles
+
+```
+./make.rtos image PROFILE=stm32f429-ap6181-attach
+./make.rtos image PROFILE=stm32f429-ap6181-scan
+./make.rtos image PROFILE=stm32f429-ap6181-join
+./make.rtos image PROFILE=stm32f429-ap6181-data
+make -C tests/board/rtos/build PROFILE=stm32f429-ap6181-data wiced-image-gate
+```
+
+Each carries one case and needs the external WICED tree to materialize
+`wireless-drivers/ap6181/vendor/` (`tools/build/wiced-tree.py`, see
+`PROVENANCE.md`). The world's switches come from the profile's Kconfig through
+`ports/f429/wiced_kconfig.h`, not from `-D` flags: the compile rule filters
+`-D` out, so a define that only exists on a command line never reaches the
+vendor sources. `wiced-image-gate` fails the build if the image carries a
+`linuxkpi`/`mac80211`/`cfg80211`/`brcmfmac` symbol.

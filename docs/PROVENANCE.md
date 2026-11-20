@@ -282,3 +282,16 @@ The same round edited two imported files; both edits are recorded in
 `components/liblinux80211/hostap/{driver_lkpi.c,hostap_ap.c,hostap_nl80211.c}`
 and the `linux80211/*.h` seams are port code and were extended in place; the
 imported hostapd tree (`third-party/wpa_supplicant-rtos`) is unchanged.
+
+
+## wireless-drivers/ap6181/vendor
+
+Cypress WICED (Wiced_006.002.001.0002, WICED commit 7947be1d4e41) is not part
+of this repository. `tools/build/wiced-tree.py` copies the pinned subset the
+AP6181 port compiles and includes from an external WICED tree into
+`wireless-drivers/ap6181/vendor/` (git-ignored) and writes a sha256 manifest
+next to it; `--check` verifies the pin and every digest, `--print-files` lists
+what the pin resolves to. The pin is the version string in
+`WiFi_SDK/version.txt` plus the commit id the tree carries, and a tree that
+does not match is refused. The vendor sources are compiled unchanged; the
+port's own files are the ones listed in `docs/F429-AP6181.md`.

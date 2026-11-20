@@ -87,3 +87,22 @@ The MCU is a separate platform, judged by its own ladder (see
 The F429 association defect was a frozen Linux clock (`jiffies` stayed 0 because the
 board's FreeRTOS config never enabled the tick hook), not a stack or driver
 defect; the 2026-11-15 bench run has the trace and the fix.
+
+
+## F429 AP6181 (BCM43362)
+
+The onboard module runs the Cypress WICED WWD driver as a first-party port
+(`wireless-drivers/ap6181`, not the Linux stack). Each rung is a case with its
+own profile, judged on relay cold boots:
+
+| Rung | Case / profile | State |
+|---|---|---|
+| attach | `ap6181_attach` / `stm32f429-ap6181-attach` | **2/2** (3/3 in the run): `wifi_on rc=0`, MAC `9c:b8:b4:74:5f:e1` |
+| scan | `ap6181_scan` / `stm32f429-ap6181-scan` | **2/2**: 18 and 13 BSS, the bench AP among them |
+| STA join | `ap6181_join` / `stm32f429-ap6181-join` | **2/2**: link up in 700-800 ms, BSSID `1c:a7:70:de:29:a1` |
+| data plane | `ap6181_data` / `stm32f429-ap6181-data` | **2/2**: 20/20 ICMP over the bench AP, 20 requests / 20 replies on the AP's own capture |
+
+The image gate (`make wiced-image-gate`) proves the images carry no
+`linuxkpi`/`mac80211`/`cfg80211`/`brcmfmac` symbol. Details, including the two
+seams that bit (one lwIP init per image, and the pbuf headroom the driver
+prepends into), are in `docs/F429-AP6181.md`.
