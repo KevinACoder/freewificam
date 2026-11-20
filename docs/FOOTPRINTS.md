@@ -20,11 +20,11 @@ SRAM reserved for DMA staging. SDRAM is the `.sdram` NOLOAD section. A task
 | `stm32f429-wifi-c6t` (throughput) | 735,936 | 81,484 | 18,496 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 18,496 | 4,456,448 |
 | `stm32f429-cfg80211-only` link probe | 168,036 | 92,660 | 16 | 1,048,576 |
-| `stm32f429-eth` wired Ethernet | 77,176 | 33,408 | 16 | 524,288 |
+| `stm32f429-eth` wired Ethernet | 77,164 | 33,408 | 16 | 524,288 |
 | 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | 0 | — |
 
 The cfg80211-only probe is a `tick` image and includes the tick case's 64 KiB
-CPU buffers; it is a link probe, not a delivery profile.  The wired-Ethernet row is `-Os`, 77,152 B `.text` + 24 B
+CPU buffers; it is a link probe, not a delivery profile.  The wired-Ethernet row is `-Os`, 77,140 B `.text` + 24 B
 `.data`, and its SDRAM reserve is the 256 KiB FreeRTOS heap plus the 256 KiB
 lwIP heap (the 8 + 8 Ethernet station buffers, 24.4 KiB, are the largest
 static-SRAM item). The 8189FS row is the

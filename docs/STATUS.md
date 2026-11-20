@@ -8,8 +8,8 @@
   STM32F4 ETH MAC, driven by the imported ST HAL ETH driver.  Two relay
   cold boots PASS: 100 Mbit/s full duplex, DHCP lease 192.168.0.34/24
   from the router, gateway 10/10, and at least one public echo 10/10 per
-  boot (223.5.5.5 one boot, 119.29.29.29 the other; the Pi's own public
-  pings 5/5 both times).  Details in [F429-ETH.md](F429-ETH.md))
+  boot (223.5.5.5 in both; the Pi's own public pings 5/5 both times).
+  Details in [F429-ETH.md](F429-ETH.md))
 - Updated: 2026-11-20 (F429 UVC/UAC to Pi RTSP: four staged profiles, link /
   one frame / 20 s video / 20 s audio+video each 2/2 relay cold boots; 269
   video frames per 20 s, audio `gaps=0 err=0`, H.264+AAC RTSP records at

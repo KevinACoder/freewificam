@@ -72,7 +72,7 @@ assumed.
 | ETH descriptor rings + 8 + 8 station buffers (24.4 KiB) | internal SRAM `.bss` | the MAC's DMA must not go through the FMC, and the copy into lwIP's pbufs is the seam |
 | lwIP pbufs | SDRAM heap | the driver copies into them; no DMA sees them |
 
-The final image: **77,176 B** flash, 33,408 B static SRAM (of which 16 B
+The final image: **77,164 B** flash, 33,408 B static SRAM (of which 16 B
 `.noncacheable`) and 524,288 B SDRAM; the link gate reports 163,200 B of RAM
 margin.  Profile: `stm32f429-eth` (`-Os`, `CONFIG_CASES="f429_eth"`,
 `F429_SDRAM`/`F429_HEAP_SDRAM`/`F429_LWIP_SDRAM`, `LWIP_DNS=y`).
@@ -104,14 +104,14 @@ One boot runs the whole ladder; each rung prints one judged line:
 
 | | boot 1 | boot 2 |
 |---|---|---|
-| image sha256 (BIN) | `bbd4c3e9…` | `bbd4c3e9…` |
-| init | 1.46 s | 1.45 s |
+| image sha256 (BIN) | `2b508dba…` | `2b508dba…` |
+| init | 1.46 s | 1.75 s |
 | PHY / link | 0007:c0f1, 100 full | 0007:c0f1, 100 full |
-| DHCP | 192.168.0.34/24, gw 192.168.0.1, 8.3 s | same lease, 9.1 s |
+| DHCP | 192.168.0.34/24, gw 192.168.0.1, 8.5 s | same lease, 9.7 s |
 | gateway echo | 10/10, 3-4 ms | 10/10, 3-4 ms |
-| name resolution | rc=0 (`111.45.11.5`) | rc=0 (`183.240.99.224`) |
-| internet echo | 223.5.5.5 10/10, 32 ms | 223.5.5.5 0/10; 119.29.29.29 10/10, 21 ms |
-| driver counters | rx=98 tx=34, no errors | rx=122 tx=45, no errors |
+| name resolution | rc=0 (`183.240.99.224`) | rc=0 (`183.240.99.224`) |
+| internet echo | 223.5.5.5 10/10, 31 ms | 223.5.5.5 10/10, 33 ms |
+| driver counters | rx=100 tx=33, no errors | rx=103 tx=34, no errors |
 | Pi → board (10 echoes) | 10/10 | 10/10 |
 | Pi → public (5 echoes) | 5/5 | 5/5 |
 
@@ -121,7 +121,7 @@ truth, independent of the board's counters.
 
 Two observations, recorded rather than explained away:
 
-* **The lease takes 8.3-9.1 s.**  A simultaneous tcpdump on the Pi shows two
+* **The lease takes 8.5-9.7 s.**  A simultaneous tcpdump on the Pi shows two
   DHCP request packets from the board 25 ms apart - the DISCOVER and then the
   REQUEST, with the server's OFFER/ACK unicast to the board and invisible on
   the Pi - and no further board-side retransmission.  The wait is therefore in
@@ -129,10 +129,13 @@ Two observations, recorded rather than explained away:
   retry loop.  The DHCP wait timeout in the case is 20 s, so this is reported, not
   gating.  A diagnostic image with lwIP's DHCP debug prints would name which
   side loses the time; it is not part of this round.
-* **223.5.5.5 answered 10/10 in one boot and 0/10 in the next**, while
-  119.29.29.29 answered 10/10 in the same boot and the Pi's own 223.5.5.5
-  pings were 5/5.  Public ICMP rate-limiting/blocking at the target is the
-  reason the gate is "at least one public target", not "this target".
+* **The gate names four public targets, not one.**  Public ICMP is
+  policy-dependent (a target may rate-limit or stop answering echoes while
+  still answering from other networks; one preliminary boot of this same
+  code had 223.5.5.5 drop all ten while 119.29.29.29 answered ten), so the
+  ladder tries 223.5.5.5, 119.29.29.29, 8.8.8.8 and 1.1.1.1 in order and
+  passes on the first one at 9/10.  Both final boots were served by
+  223.5.5.5.
 
 ## 6. Failure modes and what the anchors would say
 

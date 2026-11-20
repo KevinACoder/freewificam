@@ -275,7 +275,7 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
 ./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
 ./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,080 B)
-./make.rtos image PROFILE=stm32f429-eth       # wired Ethernet: LAN8720A + ST HAL + DHCP + public ICMP (77,176 B)
+./make.rtos image PROFILE=stm32f429-eth       # wired Ethernet: LAN8720A + ST HAL + DHCP + public ICMP (77,164 B)
 ./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,936 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"
