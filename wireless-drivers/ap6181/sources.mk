@@ -53,6 +53,7 @@ obj-$(CONFIG_WICED_AP6181) += \
 	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/misc.c \
 	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_syscfg.c \
 	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_exti.c \
+	vendor/WiFi_SDK/WICED/internal/wiced_lib.c \
 	vendor/WiFi_SDK/WICED/platform/MCU/wwd_resources.c \
 	vendor/WiFi_SDK/WICED/platform/MCU/platform_resource.c \
 	vendor/WiFi_SDK/libraries/utilities/TLV/tlv.c \
