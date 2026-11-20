@@ -719,6 +719,25 @@ restart:
 				ap6181_trace("ap6181: inplace rb failed\n");
 			}
 		}
+		if (((argument >> 28) & 0x7UL) == 2UL &&
+		    direction == BUS_WRITE) {
+			uint32_t t0 = (uint32_t)host_rtos_get_time();
+			uint32_t high = 0U;
+
+			while (((uint32_t)host_rtos_get_time() - t0) < 200U) {
+				if ((*(volatile uint32_t *)0x40020010UL & 1UL) !=
+				    0UL) {
+					high = 1U;
+					break;
+				}
+			}
+			ap6181_trace("ap6181: pa0 watch %lu ms high=%lu oob=%lu "
+				     "intrs=%lu\n",
+				     (unsigned long)((uint32_t)host_rtos_get_time() - t0),
+				     (unsigned long)high,
+				     (unsigned long)ap6181_stats.oob_intrs,
+				     (unsigned long)ap6181_stats.sdio_intrs);
+		}
 		if (direction == BUS_READ)
 			memcpy(data, s_stage, data_size);
 	} else {
@@ -799,8 +818,10 @@ ap6181_read_backplane(uint32_t addr, void *buf, uint16_t len)
 	if (rc != WWD_SUCCESS)
 		return rc;
 
+	/* The windowed offset field is 15 bits; bit 15 flags a 32-bit
+	 * backplane access (SBSDIO_SB_ACCESS_2_4B_FLAG). */
 	argument = (1UL << 28) | (1UL << 27) | (1UL << 26) |
-		   ((addr & 0x1FFFFUL) << 9) |
+		   (((addr & 0x7FFFUL) | (len == 4U ? 0x8000UL : 0UL)) << 9) |
 		   ((uint32_t)((len + 63U) / 64U) & 0x1FFUL);
 	return host_platform_sdio_transfer(BUS_READ, SDIO_CMD_53, SDIO_BLOCK_MODE,
 					   SDIO_64B_BLOCK, argument, (uint32_t *)buf,
@@ -851,10 +872,36 @@ host_platform_enable_high_speed_sdio(void)
 	return WWD_SUCCESS;
 }
 
+/* Polling stand-in for the card interrupt: the WWD thread only looks at F2
+ * after a notification, and this controller cannot see an in-band SDIO
+ * interrupt while the bus is idle.  A low-rate tick keeps the thread looking. */
+static void
+wifi_poll_task(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		vTaskDelay(pdMS_TO_TICKS(5));
+		wwd_thread_notify_irq();
+	}
+}
+
+static void
+wifi_poll_start(void)
+{
+	static bool started;
+
+	if (!started) {
+		started = true;
+		(void)xTaskCreate(wifi_poll_task, "wifi-poll", 256U, NULL, 2U,
+				  NULL);
+	}
+}
+
 wwd_result_t
 host_platform_bus_enable_interrupt(void)
 {
-	ap6181_trace("ap6181: t int_en=%lu\n",
+	wifi_poll_start();
+	}	ap6181_trace("ap6181: t int_en=%lu\n",
 		     (unsigned long)host_rtos_get_time());
 	SDIO_MASK = MASK_SDIOIT;
 	return WWD_SUCCESS;
