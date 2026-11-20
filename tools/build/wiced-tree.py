@@ -75,6 +75,10 @@ WHITELIST = (
     # its own host for a while; the vendor file is the one that is known to
     # work with this chip, so it is the one that ships.
     "WiFi_SDK/WICED/platform/MCU/STM32F4xx/WWD/wwd_SDIO.c",
+    "WiFi_SDK/WICED/platform/MCU/STM32F4xx/WWD/wwd_platform.c",
+    "WiFi_SDK/WICED/RTOS/FreeRTOS/WWD/wwd_rtos.c",
+    "WiFi_SDK/WICED/network/LwIP/WWD/wwd_buffer.c",
+    "WiFi_SDK/WICED/network/LwIP/WWD/wwd_network.c",
     "wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/inc/*.h",
     "wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_sdio.c",
     "wifi_lwip_AP/Libraries/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h",
