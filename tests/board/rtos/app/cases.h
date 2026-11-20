@@ -91,6 +91,9 @@ int case_f429_ap6181_join_run(void);
 #if defined(RTOS_CASE_AP6181_DATA)
 int case_f429_ap6181_data_run(void);
 #endif
+#if defined(RTOS_CASE_AP6181_TPUT)
+int case_f429_ap6181_tput_run(void);
+#endif
 
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
 int usb_msc_case(unsigned int busid, const char *hcd);

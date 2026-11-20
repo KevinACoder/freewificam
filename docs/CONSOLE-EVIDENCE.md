@@ -1611,6 +1611,18 @@ ap6181: icmp sent=20 recv=20 tx=21 buffail=0
 ap6181: PASS DATA
 ```
 
+```
+ap6181: stage=tput
+ap6181: tput tx_bytes=4194580 tx_ms=5531
+ap6181: tput rx_bytes=4194872 rx_ms=3413
+ap6181: tput tx=6.06 Mbit/s rx=9.83 Mbit/s
+ap6181: PASS TPUT
+```
+
+The peer's own counter for the same phase is printed by the bench server
+(`sink bytes 4194580 ms 5538 Mbit/s 6.06`), so the rung is the wire, not the
+board's clock.
+
 `wwd_wifi_join()` returns when the request is accepted, so a `join rc=0` line
 alone is not the rung: the link wait and the BSSID are what the case judges.
 The data rung's ICMP is also visible on the bench AP's own capture (20 echo

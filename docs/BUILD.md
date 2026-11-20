@@ -418,6 +418,7 @@ move to 4 is a separate heap A/B, not a free size win.
 ./make.rtos image PROFILE=stm32f429-ap6181-scan
 ./make.rtos image PROFILE=stm32f429-ap6181-join
 ./make.rtos image PROFILE=stm32f429-ap6181-data
+./make.rtos image PROFILE=stm32f429-ap6181-tput
 make -C tests/board/rtos/build PROFILE=stm32f429-ap6181-data wiced-image-gate
 ```
 

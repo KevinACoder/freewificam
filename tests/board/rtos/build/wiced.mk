@@ -14,7 +14,7 @@
 # missing headers.
 
 # Every case this world can carry; the selected ones come from CONFIG_CASES.
-WICED_CASES ?= ap6181_attach ap6181_scan ap6181_join ap6181_data
+WICED_CASES ?= ap6181_attach ap6181_scan ap6181_join ap6181_data ap6181_tput
 
 ifeq ($(CONFIG_WICED_AP6181),1)
 

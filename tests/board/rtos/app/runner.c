@@ -88,6 +88,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_AP6181_DATA)
 	CASE_ENTRY("ap6181_data", case_f429_ap6181_data_run)
 #endif
+#if defined(RTOS_CASE_AP6181_TPUT)
+	CASE_ENTRY("ap6181_tput", case_f429_ap6181_tput_run)
+#endif
 #if defined(RTOS_CASE_KPI_LIVE)
 	CASE_ENTRY("kpi_live", case_kpi_live_run)
 #endif

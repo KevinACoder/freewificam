@@ -101,6 +101,7 @@ own profile, judged on relay cold boots:
 | scan | `ap6181_scan` / `stm32f429-ap6181-scan` | **2/2**: 18 and 13 BSS, the bench AP among them |
 | STA join | `ap6181_join` / `stm32f429-ap6181-join` | **2/2**: link up in 700-800 ms, BSSID `1c:a7:70:de:29:a1` |
 | data plane | `ap6181_data` / `stm32f429-ap6181-data` | **2/2**: 20/20 ICMP over the bench AP, 20 requests / 20 replies on the AP's own capture |
+| throughput (report only, no gate) | `ap6181_tput` / `stm32f429-ap6181-tput` | **measured 2/2**: TCP **TX 6.06 / 6.33 Mbit/s**, **RX 9.83 / 10.15 Mbit/s**, 4 MiB per phase, the AP's own counters agreeing to 0.1 Mbit/s |
 
 The image gate (`make wiced-image-gate`) proves the images carry no
 `linuxkpi`/`mac80211`/`cfg80211`/`brcmfmac` symbol. Details, including the two
