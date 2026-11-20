@@ -901,7 +901,7 @@ wwd_result_t
 host_platform_bus_enable_interrupt(void)
 {
 	wifi_poll_start();
-	}	ap6181_trace("ap6181: t int_en=%lu\n",
+	ap6181_trace("ap6181: t int_en=%lu\n",
 		     (unsigned long)host_rtos_get_time());
 	SDIO_MASK = MASK_SDIOIT;
 	return WWD_SUCCESS;
