@@ -60,7 +60,9 @@
 
 #define SDIO_DCTRL_DTEN		(1UL << 0)
 #define SDIO_DCTRL_DTDIR_CARD	(1UL << 1)	/* card -> host (read) */
-#define SDIO_DCTRL_DTMODE_BLOCK	(1UL << 2)
+/* DTMODE: 0 = block mode, 1 = stream mode (ST's SDIO_TransferMode_Block is
+ * 0x0).  Stream mode never lets the card ack the last block. */
+#define SDIO_DCTRL_DTMODE_BLOCK	(0UL << 2)
 #define SDIO_DCTRL_DMAEN	(1UL << 3)
 #define SDIO_DCTRL_SDIOEN	(1UL << 11)
 
