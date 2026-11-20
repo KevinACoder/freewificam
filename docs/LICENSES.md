@@ -15,6 +15,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/lwip/` | BSD-3-Clause style | `COPYING` at the tree root |
 | `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; twelve patches applied in the tree, recorded in `patches/` |
 | `third-party/fsl_sdmmc/` | BSD-3-Clause | NXP copyright blocks; `COPYING-BSD-3` beside the tree |
+| `third-party/stm32f4xx-hal/` | BSD-3-Clause (ST HAL driver and ST CMSIS device headers) AND BSD-3-Clause (ARM CMSIS core headers) | 16 files byte-identical to the vendor release: STM32F4xx HAL driver 1.7.3, CMSIS device F4 2.6.2 and the CMSIS core 4.30 Cortex-M headers. Every file carries its own copyright/licence block; the tree's `PROVENANCE.md` and `MANIFEST.sha256` are the authority |
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
 | `third-party/ulog/` | MIT | |
@@ -48,6 +49,11 @@ specification), `app/usb/uac_app.c` and the `uac_*` cases; they contain no GPL
 unit.  The microphone image also links the video class and its census because
 this camera's audio function only produces samples after the video function
 has been claimed; that does not change the license of the image.
+
+The F429 wired-Ethernet image (`stm32f429-eth`) links the BSD-3-Clause ST HAL
+ETH driver from `third-party/stm32f4xx-hal/` and the BSD-3-Clause lwIP stack;
+it contains no GPL unit.  The imported HAL is a vendor library, not a Linux
+kernel unit, so this image stays on the non-GPL side of the same boundary.
 
 The F429 AP6181 images (`stm32f429-ap6181-attach`, `-scan`, `-join`, `-data`)
 link the Cypress WICED WWD driver. They contain no GPL unit and no Linux

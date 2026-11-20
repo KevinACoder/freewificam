@@ -295,3 +295,17 @@ what the pin resolves to. The pin is the version string in
 `WiFi_SDK/version.txt` plus the commit id the tree carries, and a tree that
 does not match is refused. The vendor sources are compiled unchanged; the
 port's own files are the ones listed in `docs/F429-AP6181.md`.
+
+## The STM32F4 HAL import (2026-11-20)
+
+The F429 wired-Ethernet line imports the STM32F4xx HAL ETH driver rather than
+writing a second MAC/DMA driver.  The tree is
+`third-party/stm32f4xx-hal/`: ST HAL driver 1.7.3 plus the CMSIS device 2.6.2
+and CMSIS core 4.30 headers it builds against, 16 files byte-identical to the
+vendor release named in the tree's own `PROVENANCE.md`, sha256 per file in its
+`MANIFEST.sha256`.  Only `stm32f4xx_hal_eth.c` and `stm32f4xx_hal_rcc.c` are
+compiled; the rest is the include closure.  This is a vendor library under
+BSD-3-Clause, not a Linux kernel unit - it does not change the GPL boundary
+described in `LICENSES.md`.  The first-party half (board pins/clocks, the
+frame-level seam, the lwIP netif bridge and the case) is written here and is
+listed in `docs/F429-ETH.md`.
