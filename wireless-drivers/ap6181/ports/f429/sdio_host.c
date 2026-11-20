@@ -495,9 +495,19 @@ restart:
 			goto retry;
 		}
 		if (command == SDIO_CMD_52) {
+			uint32_t a52 = (argument >> 9) & 0x1FFFFUL;
+
 			ap6181_stats.cmd52_count++;
 			ap6181_stats.last52_arg = argument;
 			ap6181_stats.last52_resp = SDIO_RESP1;
+			if ((argument & 0x80000000UL) == 0UL &&
+			    ap6181_stats.cmd52_count > 90U)
+				ap6181_trace("ap6181: cmd52 %s a=0x%05lx d=0x%02lx "
+					     "resp=0x%08lx\n",
+					     ((argument & 0x80000000UL) != 0UL) ?
+					     "wr" : "rd", (unsigned long)a52,
+					     (unsigned long)(argument & 0xFFUL),
+					     (unsigned long)SDIO_RESP1);
 		}
 	}
 
