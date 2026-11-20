@@ -1,0 +1,30 @@
+# F429 AP6181 (BCM43362) STA join: the module's SDIO path, the firmware download
+# and the WICED bring-up, under the first-party port that replaced the Linux
+# compatibility stack for this chip.  See docs/F429-AP6181.md.
+#
+# Build input: the Cypress WWD tree is materialized into
+# wireless-drivers/ap6181/vendor from the external tree named by WICED_ROOT
+# (tools/build/wiced-tree.py).  The image is for use with Cypress ICs only and
+# is not a redistributable artifact.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_WICED_AP6181=y
+CONFIG_WICED_AP6181_LOG=y
+CONFIG_CASES="ap6181_join"
+CONFIG_RUNNER_STACK_KB=16
+# The stack's defaults are the RK3568 tier (1 MiB heap, 448 pool buffers); this
+# image carries the wireless stack only, and every WWD buffer is a pbuf, so the
+# heap and pool are sized for the driver's own traffic.
+CONFIG_LWIP_MEM_SIZE_KB=64
+CONFIG_LWIP_PBUF_POOL_SIZE=16
+CONFIG_LWIP_TCP_WND=8192
+CONFIG_LWIP_TCP_SND_BUF=8192
+CONFIG_LWIP_TCP_SND_QUEUELEN=32
+CONFIG_LWIP_TCP_SNDLOWAT=4096
+CONFIG_LWIP_MEMP_NUM_TCP_SEG=32
+CONFIG_LWIP_MEMP_NUM_TCPIP_MSG_INPKT=8
