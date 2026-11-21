@@ -35,6 +35,8 @@ brought up; its detailed performance records are in
 | **STM32F429** | USB host MSC + SDRAM | 2/2; U-disk block I/O and the DMA-to-SDRAM arm |
 | **STM32F429** | AP6181 SDIO (Cypress WICED port) | attach/scan/join/ICMP 2/2; report-only TCP TX 6.06 / RX 9.83 Mbit/s |
 | **STM32F429** | Wired Ethernet: LAN8720A (RMII) + the imported ST HAL ETH driver | 2/2; 100 Mbit/s full duplex, DHCP lease from the router, gateway 10/10, one public target 10/10 per boot (see below) |
+| **STM32F429** | Wired Ethernet throughput (iperf2) | report-only: TCP 14-22 Mbit/s down, 17-20 up; UDP 25-27 received, 12.7 sent; far from the 100 Mbit/s line (see below) |
+| **STM32F429** | UVC/UAC stream over the wired link | 600 s window carried by three boots (~15 fps, 0 USB/CRC errors, audio `gaps=0`, 1-58 engine drops); verdict PASS after two gate fixes (see below) |
 | RK3568 (Cortex-A55) | mac80211/cfg80211 + iwlwifi, AC 7260 PCIe | C0-C6 2/2; TCP down 142.6%, up 93.3% of Linux; AP down 99.9%, up 57.3% |
 | RK3568 | RTL8189FTV SDIO, vendor stack | station 2/2, AP 2/2; TCP down 69-73% of Linux |
 | RK3568 | RTL8851BU USB, rtw89 | station/AP/monitor run; AP TCP down 116.9%, up 78.4% (one gate failed) |

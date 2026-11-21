@@ -1808,3 +1808,82 @@ ACK are unicast to the board and do not reach the Pi) and no further
 board-side retransmission, so the wait is in the server's reply path rather
 than in lwIP's retry loop - it is reported, not gated (the case's DHCP wait
 budget is 20 s).
+
+## STM32F429 wired Ethernet — iperf2 throughput (2026-11-21)
+
+The `f429_eth` case's throughput arm, one boot, four phases against the Pi's
+iperf 2.2.1 (timestamps are the kernel tick now: the run outlives the DWT
+counter's 32-bit wrap):
+
+```text
+[  10.275] f429_eth: dhcp ip=192.168.0.34 mask=255.255.255.0 gw=192.168.0.1 lease_ms=8800
+[  10.278] f429_eth: tput tcpdn ready port=5001
+[  22.430] f429_eth: tput tcpdn bytes=26214424 ms=10068 kbit=20824 aborted=0
+[  22.433] f429_eth: tput tcpup ready peer=192.168.0.17 port=5001
+[  32.751] f429_eth: tput tcpup bytes=21723364 ms=10000 kbit=17376 aborted=0
+[  32.753] f429_eth: tput udpdn ready port=5002
+[  44.755] f429_eth: tput udpdn pkts=26382 bytes=38781540 kbit=25854
+[  44.759] f429_eth: tput udpup ready peer=192.168.0.17 port=5002 rate_mbit=90
+[  54.762] f429_eth: tput udpup pkts=11343 bytes=15880200 ms=10000 kbit=12704
+[  54.766] f429_eth: stats rx=56721 tx=49550 len_err=0 copy_err=0 tx_busy=0 missed=0
+[  54.771] f429_eth: PASS TPUT
+```
+
+The peer's side of the same boot: TCP down 20.8 Mbit/s (25.0 MB in 10.07 s;
+5-10 s slice 25.2), UDP down offered 94.4 Mbit/s in every 5 s interval (113 MB
+total), and the board received 38.8 MB of it.  The second arm
+(`stm32f429-eth-tput-perf`, `-O2`, 64 pbufs, 32 KiB windows) gave 14.4 / 20.5 /
+27.3 / 12.8 Mbit/s on the same four phases: the tier moved TCP up by 18% and
+nothing else by a consistent margin.
+
+Read against the 100 Mbit/s PHY, the four phases are 14-27 Mbit/s: the receive
+path tops out near 26 Mbit/s and the paced transmit at 12.7 Mbit/s.  The UDP
+down loss (64-66%) is the offered 94 Mbit/s meeting that ceiling, not a second
+defect.  The numbers are report-only; `PASS TPUT` means the four phases moved
+bytes, and the follow-up levers (interrupt receive, deeper rings, batched
+transmit kicks, layered netio counters) are recorded in
+[F429-ETH.md](F429-ETH.md) section 7.
+
+What the transcript proves: the wired link carries a full-duration iperf-style
+session in each direction, the lwIP TCP path is good for ~20 Mbit/s, and the
+uplink sink receives every paced datagram (11,407/11,407 in the second arm).
+What it does not prove: that this is the board's ceiling - no interrupt or
+zero-copy arm has been run, and the per-frame cost has not been split.
+
+## STM32F429 wired stream — UVC/UAC over the LAN8720A, ten minutes (2026-11-21)
+
+`stm32f429-stream-eth` (`pi_stream` stage 4, `CONFIG_STREAM_WINDOW_MS=600000`,
+DHCP, peer `192.168.0.17`) sends the camera's MJPEG and the microphone's PCM to
+the Pi's receiver over the board's RJ45.  The third boot's transcript:
+
+```text
+[  11.834] stream: link join_rc=0 join_ms=10725 dhcp=1 ip=192.168.0.34 gw=192.168.0.1
+[ 614.495] stream: window ms=600000 elapsed=600128
+[ 614.504] stream: rx uvc frames=8994 bytes=211746748 soi=8994 eoi=8994 max=23543 dropped=1 invalid=0 err=0 urb_err=0
+[ 614.508] stream: tx video frames=8994 msgs=8994 bytes=211746748 drops=0 connects=1 fail=0
+[ 614.512] stream: rx uac rate=16000 ch=1 packets=600131 bytes=19203728 gaps=0 first=0 max=0 err=0 overrun=0 nz=9599454 peak=2468
+[ 614.515] stream: tx audio blocks=18750 bytes=19199536 drops=0 connects=1 fail=0
+[ 614.517] stream: PASS AV
+```
+
+The Pi's exit line for the same boot: 8,994 video frames / 211,746,748 B,
+18,750 audio blocks / 19,199,536 B, `crc_err=0`, `short=0`, `bad_header=0`,
+`jpeg_bad=0`, one connection per port; its minute lines read 899-900 frames in
+every 60 s interval after the first partial one.
+
+The first two ten-minute boots are kept as failures: boot 1 dropped 58 of 8,937
+frames (0.65%) and failed the case's absolute five-frame budget (written for the
+20 s arm); boot 2 had one drop and perfect audio counters but failed the byte
+window because the expected-bytes product overflowed 32 bits at 600 s
+(19.2e9).  Both thresholds are fixed (drop budget scales with the window: 150
+for 600 s; expected bytes are 64-bit), and boot 3 is the first PASS.  The
+stability reading does not depend on either fix: across all three boots the link
+held ten minutes at ~15 fps, the microphone missed no USB frame, and the
+receiver's totals equal the sender's.
+
+What it proves: the wired link carries the camera and microphone workload for
+ten minutes with no USB, receiver or protocol error, and the frame rate is flat.
+What it does not prove: that the 0.01-0.65% engine drops are zero under every
+scene (they are queue overflows, not transport errors), or anything about
+throughput - the window runs at ~2.3 Mbit/s of video and 256 kbit/s of audio,
+far below the link's measured ceiling (section 7 of F429-ETH.md).

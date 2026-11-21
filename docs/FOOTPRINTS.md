@@ -21,13 +21,20 @@ SRAM reserved for DMA staging. SDRAM is the `.sdram` NOLOAD section. A task
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 18,496 | 4,456,448 |
 | `stm32f429-cfg80211-only` link probe | 168,036 | 92,660 | 16 | 1,048,576 |
 | `stm32f429-eth` wired Ethernet | 77,164 | 33,408 | 16 | 524,288 |
+| `stm32f429-eth-tput` (bring-up tier) | 81,324 | 32,192 | 0 | 524,288 |
+| `stm32f429-eth-tput-perf` (measurement tier) | 92,324 | 32,256 | 60 | 656,384 |
+| `stm32f429-stream-eth` (wired stream, stage 4) | 147,980 | 81,192 | 32 | 1,703,936 |
 | 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | 0 | — |
 
 The cfg80211-only probe is a `tick` image and includes the tick case's 64 KiB
 CPU buffers; it is a link probe, not a delivery profile.  The wired-Ethernet row is `-Os`, 77,140 B `.text` + 24 B
 `.data`, and its SDRAM reserve is the 256 KiB FreeRTOS heap plus the 256 KiB
 lwIP heap (the 8 + 8 Ethernet station buffers, 24.4 KiB, are the largest
-static-SRAM item). The 8189FS row is the
+static-SRAM item).  The throughput rows are the same
+image with the case's iperf arm (the measurement tier moves the heap to
+384 KiB); the wired-stream row adds the camera/microphone classes and the
+3 × 128 KiB frame pool in SDRAM, and its 81 KiB of static SRAM is the camera
+and USB classes rather than the driver. The 8189FS row is the
 131-TU vendor driver compiled with the F429 face (`--gc-sections` has not run
 yet); its base/lwIP/glue budget is in `BUILD.md`.
 

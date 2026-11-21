@@ -71,6 +71,16 @@ first join often associates but never reaches ready-to-transceive, and the
 retry is what makes the link usable. DHCP is used for the link stage; a static
 fallback is printed when it times out.
 
+## Wired link variant
+
+The same stage-4 case and the same wire format also run over the board's
+LAN8720A: profile `stm32f429-stream-eth` ( `pi_stream`, `CONFIG_STREAM_LINK_ETH`,
+DHCP, `CONFIG_STREAM_PI_IP="192.168.0.17"`, `CONFIG_STREAM_WINDOW_MS=600000`).
+The network half is `app/stream/eth_net.c` — the board's Ethernet seam plus
+lwIP sockets under the same `pi_net.h` — so the camera classes, the senders and
+the Pi receiver are the ones described here.  Details, the ten-minute window
+and its counters: [F429-ETH.md](F429-ETH.md) section 8.
+
 ## Pi side
 
 `tools/pi-stream/` carries the receiver, the ffmpeg publisher, a mediamtx

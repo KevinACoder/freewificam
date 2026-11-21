@@ -4,6 +4,14 @@
 > F429 UVC camera parameters and results: [F429-UVC.md](F429-UVC.md).
 > F429 UAC microphone parameters and results: [F429-UAC.md](F429-UAC.md).
 
+- Updated: 2026-11-21 (F429 wired Ethernet, two follow-ups.  iperf2: TCP
+  14-22 Mbit/s down / 17-20 up, UDP 25-27 received and 12.7 sent - 14-27% of
+  the 100 Mbit/s line, so it is not saturated; the measurement tier gave no
+  consistent step.  The UVC/UAC stream moved onto the wired link for 600 s:
+  three boots carried the window at ~15 fps with 0 USB/CRC errors and audio
+  gaps=0 (engine drops 1-58 frames); the long window exposed an absolute drop
+  budget and a 32-bit expected-bytes overflow, both fixed, and the third boot
+  PASSes.  Details in [F429-ETH.md](F429-ETH.md) sections 7-8)
 - Updated: 2026-11-20 (F429 wired Ethernet: the board's LAN8720A on the
   STM32F4 ETH MAC, driven by the imported ST HAL ETH driver.  Two relay
   cold boots PASS: 100 Mbit/s full duplex, DHCP lease 192.168.0.34/24

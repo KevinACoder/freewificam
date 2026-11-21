@@ -44,6 +44,9 @@ that way.
 | `stm32f429-uvc-800x600` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the same at 800x600 MJPEG, the Pro 9000's largest full-speed mode; report-only rate, same four-case gate |
 | `stm32f429-uvc-720p` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the 1280x720 target image for a camera whose full-speed descriptor set actually contains a 720-line mode; the bench Pro 9000 does not, so its verdict for this camera is the descriptor-table negative |
 | `stm32f429-eth` | f429_eth | F429's LAN8720A (RMII) on the STM32F4 ETH MAC, driven by the imported ST HAL ETH driver: PHY identity, the negotiated link, a DHCP lease from the bench router, the gateway's ARP and echo, name resolution (report only), and at least one public echo reply; verdict `f429_eth: PASS DATA` |
+| `stm32f429-eth-tput` | f429_eth | the wired image with the case's iperf throughput arm: TCP down/up through lwiperf and UDP down/up against the Pi's iperf2 (raw blast counted by a UDP sink); verdict `f429_eth: PASS TPUT`; the bring-up stack tier |
+| `stm32f429-eth-tput-perf` | f429_eth | the same arm on the measurement tier (`-O2`, 64 pbufs, 32 KiB windows, 384 KiB heap) |
+| `stm32f429-stream-eth` | pi_stream | the AP6181 stream stage 4 moved onto the wired link: UVC 640x480 MJPEG + UAC 16 kHz PCM to the Pi's wired address, `CONFIG_STREAM_WINDOW_MS=600000`; verdict `stream: PASS AV` |
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
@@ -275,7 +278,10 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
 ./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
 ./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,080 B)
-./make.rtos image PROFILE=stm32f429-eth       # wired Ethernet: LAN8720A + ST HAL + DHCP + public ICMP (77,164 B)
+./make.rtos image PROFILE=stm32f429-eth       # wired Ethernet: LAN8720A + ST HAL + DHCP + public ICMP (~77 KB)
+./make.rtos image PROFILE=stm32f429-eth-tput  # the same + the iperf throughput arm (bring-up tier)
+./make.rtos image PROFILE=stm32f429-eth-tput-perf  # the throughput arm on the measurement tier
+./make.rtos image PROFILE=stm32f429-stream-eth  # UVC/UAC over the wired link, ten-minute window
 ./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,936 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"

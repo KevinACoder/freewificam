@@ -75,7 +75,10 @@ assumed.
 The final image: **77,164 B** flash, 33,408 B static SRAM (of which 16 B
 `.noncacheable`) and 524,288 B SDRAM; the link gate reports 163,200 B of RAM
 margin.  Profile: `stm32f429-eth` (`-Os`, `CONFIG_CASES="f429_eth"`,
-`F429_SDRAM`/`F429_HEAP_SDRAM`/`F429_LWIP_SDRAM`, `LWIP_DNS=y`).
+`F429_SDRAM`/`F429_HEAP_SDRAM`/`F429_LWIP_SDRAM`, `LWIP_DNS=y`).  The numbers
+above are the image the 2/2 boots ran (`2b508dba…`); the current tree also
+switches the console stamp to the kernel tick when the case starts (+16 B,
+77,180 B), which is why a fresh build's digest differs.
 
 ```bash
 cd freewificam
@@ -147,14 +150,101 @@ Two observations, recorded rather than explained away:
 | `dhcp timeout` with `link speed=100` | DHCP/ARP path or the router | the `stats`/`bridge` counters and the driver's `missed` count |
 | No public echo, gateway echo 10/10, peer ping 10/10 | upstream ICMP policy | the Pi's public ping in the same round |
 
-## 7. Non-goals
+## 7. Throughput on the wire (iperf2)
 
-Throughput (the polled 8-frame ring is built for correctness, not a
-measurement; `docs/RK3568-PERFORMANCE.md`'s wired numbers are the other
-board), IPv6, wake-on-LAN/PMT, the ETH interrupt arm, link-flap
+Two arms, same case and bench, one variable: the profile's stack tier.
+
+| arm | profile | build | flash | BIN sha256 |
+|---|---|---|---:|---|
+| A (bring-up tier) | `stm32f429-eth-tput` | `-Os`, 255 KiB heap, 24 pbufs, 16 KiB windows | 81,324 B | `4501f8b7…` |
+| B (measurement tier) | `stm32f429-eth-tput-perf` | `-O2`, 384 KiB heap, 64 pbufs, 32 KiB windows | 92,324 B | `9126ee29…` |
+
+The peer is the Pi's iperf 2.2.1.  The two downlink phases run `iperf -c` against
+the board's lwiperf server; the two uplink phases run against the Pi's TCP
+server and a raw UDP counting sink (the paced blast has no iperf2 header, so
+`iperf -s -u` cannot report it).  One relay cold boot per arm, four phases each:
+
+| phase | direction | arm A | arm B |
+|---|---|---|---|
+| TCP | Pi → board, 10 s | 20.8 Mbit/s (26.2 MB) | 14.4 Mbit/s (18.3 MB) |
+| TCP | board → Pi, 10 s | 17.4 Mbit/s (21.7 MB) | 20.5 Mbit/s (25.6 MB) |
+| UDP | Pi → board, offered 94.4 Mbit/s | 25.9 Mbit/s received, 66% dropped | 27.3 Mbit/s received, 64% dropped |
+| UDP | board → Pi, paced 90 Mbit/s | 12.7 Mbit/s sent (11,343 pkts) | 12.8 Mbit/s sent (11,407 pkts), sink 11,407/11,407 |
+
+**The line is not saturated.**  Against a 100 Mbit/s PHY (94 Mbit/s at the frame
+level) the four phases land at 14-27 Mbit/s: a receive path that tops out near
+26 Mbit/s, and a send path that tops out near 12.7 Mbit/s.  The measurement
+tier did not move the receive ceiling (TCP down and UDP down are flat within
+run-to-run variance; TCP down varied 14-22 Mbit/s across boots even at arm A),
+so the lwIP windows and pool sizes are not the binding constraint.  The named
+suspects are the receive path's per-frame cost (an 8-frame ring polled every
+millisecond, a `pbuf` allocation and copy per frame) and the send path's
+one-frame-per-kick pacing between `HAL_ETH_TransmitFrame` and the transmit
+underflow; the next round's levers are the layered netio counters (ring / bridge
+/ stack / wire), a deeper or interrupt-driven receive arm, and a batched
+transmit kick.  The UDP downlink's 64-66% loss is the offered rate meeting that
+26 Mbit/s ceiling, not a second defect.
+
+Two instrument notes: the Pi sink reports 1,520 B per 1,400 B datagram (packet
+counts are exact; byte totals are not used here), and the UDP uplink's sink
+count is quoted only from the arm whose sink window was verified end to end.
+
+## 8. Streaming over the wire (UVC/UAC, ten minutes)
+
+The AP6181 stream line (`stm32f429-stream-av`) has a wired sibling:
+`stm32f429-stream-eth` is the same `pi_stream` stage 4 - UVC 640x480 MJPEG plus
+the camera microphone's 16 kHz PCM - on the board's LAN8720A instead of the
+Wi-Fi module.  The network half is `app/stream/eth_net.c`, which implements the
+same `pi_net.h` over the board seam and lwIP's sockets (DHCP lease, a three-echo
+health ping, then the two senders); the camera half and the receiver protocol
+are unchanged.  The profile sets `CONFIG_STREAM_WINDOW_MS=600000`, so the case
+runs the same ladder for ten minutes before its verdict.
+
+Three 600 s boots of the same case (the image changed between them only in the
+gate arithmetic noted below):
+
+| | boot 1 | boot 2 | boot 3 |
+|---|---|---|---|
+| window | 600.056 s | 600.057 s | 600.128 s |
+| video | 8,937 frames, 189.9 MB | 8,994 frames, 207.2 MB | 8,994 frames, 211.7 MB |
+| engine drops | 58 (0.65%) | 1 | 1 |
+| USB errors / URB errors | 0 / 0 | 0 / 0 | 0 / 0 |
+| microphone | 600,059 pkts, 19.20 MB, `gaps=0` | 600,060 pkts, 19.20 MB, `gaps=0` | 600,131 pkts, 19.20 MB, `gaps=0` |
+| sender | video 8,937 msgs / 0 fail / 1 connect; audio 18,750 blocks / 0 fail | same shape | same shape |
+| Pi receiver | 8,937 frames / 18,750 blocks, `crc_err=0`, `short=0`, 1 connection each | 8,994 / 18,750, same | 8,994 / 18,750, same |
+| Pi minute lines | 841-958 frames/min | 899-900 | 899-900 |
+| verdict | FAIL (drop budget 5) | FAIL (audio byte window) | **PASS AV** |
+
+The ten-minute window found two thresholds that were written for the 20 s
+acceptance arm, both in the case (and mirrored in the judge):
+
+* **The drop budget was an absolute five frames.**  Boot 1 dropped 58 of 8,937
+  (0.65%), so it failed although every error counter and the receiver were
+  clean.  The budget is now a rate - five per 20 s of the configured window,
+  i.e. 150 for 600 s - and the 20 s acceptance profiles keep their five.
+* **The audio byte window was computed in 32 bits.**  `rate x channels x
+  subframe x elapsed` is 19.2e9 at 600 s and wrapped, so boot 2's perfect audio
+  (600,060 packets, `gaps=0`) looked out of its 120% bound.  The product and
+  the comparison are 64-bit now.
+
+Boots 1 and 2 are kept as failures under the gates they ran; boot 3 is the
+first ten-minute boot with both fixes and prints `PASS AV`.  The stable reading
+across all three: the camera holds ~15 fps (899-900 frames per minute after the
+first partial minute), the microphone never misses a USB frame, the Pi receives
+every frame and block (its byte totals equal the sender's), and the engine
+drops 0.01-0.65% of frames with no USB error.  The 600 s window is carried at
+~2.3 Mbit/s of video plus 256 kbit/s of audio, far inside the link's measured
+ceiling; it is a stability arm, not a bandwidth arm.
+
+## 9. Non-goals
+
+The throughput *target*: section 7 measures the current image, and the next
+levers there (interrupt receive, deeper rings, batched transmit kicks,
+checksum offload) are separate arms, not requirements of this one.  Also
+not here: IPv6, wake-on-LAN/PMT, the ETH interrupt arm as shipped, link-flap
 renegotiation, the PHY interrupt (the pin is REFCLKO), and DNS as a gate.
 
-## 8. References
+## 10. References
 
 * V2 base schematic, sheet 9 "以太网接口" (LAN8720A, HR911105A, straps):
   the vendor hardware zip, `F429_F767_H743II_挑战者_V2/原理图/`.
