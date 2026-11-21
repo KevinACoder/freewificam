@@ -733,6 +733,95 @@ F429_ETH_BODY = (
 )
 
 
+F429_ETH_TPUT_BODY = (
+    "f429_eth: start\n"
+    "f429_eth: init rc=0\n"
+    "f429_eth: phy id=0007:c0f1 addr=0\n"
+    "f429_eth: mac=02:00:1a:2b:3c:4d\n"
+    "f429_eth: link speed=100 duplex=1\n"
+    "f429_eth: dhcp ip=192.168.0.77 mask=255.255.255.0 gw=192.168.0.1 "
+    "lease_ms=900\n"
+)
+
+
+def f429_eth_tput_ok() -> str:
+    return (BANNER + F429_ETH_TPUT_BODY
+            + "f429_eth: tput tcpdn ready port=5001\n"
+            + "f429_eth: tput tcpdn bytes=11000000 ms=10000 kbit=8800 "
+              "aborted=0\n"
+            + "f429_eth: tput tcpup ready peer=192.168.0.17 port=5001\n"
+            + "f429_eth: tput tcpup bytes=10500000 ms=10000 kbit=8400 "
+              "aborted=0\n"
+            + "f429_eth: tput udpdn ready port=5002\n"
+            + "f429_eth: tput udpdn pkts=7800 bytes=11100000 kbit=7400\n"
+            + "f429_eth: tput udpup ready peer=192.168.0.17 port=5002 "
+              "rate_mbit=90\n"
+            + "f429_eth: tput udpup pkts=80000 bytes=112000000 ms=10000 "
+              "kbit=89600\n"
+            + "f429_eth: stats rx=9000 tx=82000 len_err=0 copy_err=0 "
+              "tx_busy=0 missed=0\n"
+            + "f429_eth: PASS TPUT\n"
+            + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
+
+
+def f429_eth_tput_missing_phase() -> str:
+    return (BANNER + F429_ETH_TPUT_BODY
+            + "f429_eth: tput tcpdn ready port=5001\n"
+            + "f429_eth: tput tcpdn bytes=11000000 ms=10000 kbit=8800 "
+              "aborted=0\n"
+            + "f429_eth: tput tcpup ready peer=192.168.0.17 port=5001\n"
+            + "f429_eth: tput tcpup bytes=10500000 ms=10000 kbit=8400 "
+              "aborted=0\n"
+            + "f429_eth: tput udpdn ready port=5002\n"
+            + "f429_eth: tput udpdn pkts=10 bytes=14000 kbit=9\n"
+            + "f429_eth: PASS TPUT\n"
+            + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
+
+
+PI_STREAM_BODY = (
+    "stream: link join_rc=0 join_ms=9800 dhcp=1 ip=192.168.0.35 "
+    "gw=192.168.0.1\n"
+    "stream: window ms=600000 elapsed=600110\n"
+    "stream: rx uvc frames=8000 bytes=144000000 soi=8000 eoi=8000 "
+    "max=18000 dropped=0 invalid=0 err=0 urb_err=0\n"
+    "stream: tx video frames=8000 msgs=7999 bytes=144000000 drops=0 "
+    "connects=1 fail=0\n"
+    "stream: rx uac rate=16000 ch=1 packets=600000 bytes=19200000 gaps=0 "
+    "first=0 max=0 err=0 overrun=0 nz=9600000 peak=2000\n"
+    "stream: tx audio blocks=30000 bytes=19200000 drops=0 connects=1 "
+    "fail=0\n"
+)
+
+
+def pi_stream_ok() -> str:
+    return (BANNER + PI_STREAM_BODY
+            + "stream: PASS AV\n"
+            + CASE_PASS.format(name="pi_stream") + RESULT_PASS)
+
+
+def pi_stream_short_window() -> str:
+    return (BANNER + PI_STREAM_BODY.replace("elapsed=600110",
+                                            "elapsed=20000")
+            + "stream: PASS AV\n"
+            + CASE_PASS.format(name="pi_stream") + RESULT_PASS)
+
+
+def pi_stream_ten_min_58() -> str:
+    # The measured ten-minute boot: 58 engine drops in 8,937 frames.  The
+    # budget scales with the window, so this is inside 5 per 20 s.
+    return (BANNER + PI_STREAM_BODY.replace(
+        "dropped=0 invalid=0", "dropped=58 invalid=0")
+            + "stream: PASS AV\n"
+            + CASE_PASS.format(name="pi_stream") + RESULT_PASS)
+
+
+def pi_stream_ten_min_over() -> str:
+    return (BANNER + PI_STREAM_BODY.replace(
+        "dropped=0 invalid=0", "dropped=200 invalid=0")
+            + "stream: PASS AV\n"
+            + CASE_PASS.format(name="pi_stream") + RESULT_PASS)
+
+
 def f429_eth_open() -> str:
     return (BANNER + F429_ETH_BODY
             + "f429_eth: ping dst=223.5.5.5 tx=10 rx=10 min=10 avg=12 "
@@ -854,6 +943,16 @@ SAMPLES = [
       "uvc_mps_max": "1023", "uvc_min_frames": "50",
       "uvc_max_frame_bytes": "131072", "uac_video_min_frames": "200"}),
     ("f429-eth-open", f429_eth_open, None, {"cases": ["f429_eth"]}),
+    ("f429-eth-tput-ok", f429_eth_tput_ok, None, {"cases": ["f429_eth"]}),
+    ("f429-eth-tput-missing", f429_eth_tput_missing_phase,
+     "without all four phase lines", {"cases": ["f429_eth"]}),
+    ("pi-stream-ok", pi_stream_ok, None, {"cases": ["pi_stream"]}),
+    ("pi-stream-short", pi_stream_short_window, "window ran 20000 ms",
+     {"cases": ["pi_stream"]}),
+    ("pi-stream-ten-min-58", pi_stream_ten_min_58, None,
+     {"cases": ["pi_stream"]}),
+    ("pi-stream-ten-min-over", pi_stream_ten_min_over, "budget 150",
+     {"cases": ["pi_stream"]}),
     ("f429-eth-no-public", f429_eth_no_public, "no public echo reply",
      {"cases": ["f429_eth"]}),
     ("f429-eth-no-link", f429_eth_no_link, "link speed=0",

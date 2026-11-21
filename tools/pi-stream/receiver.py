@@ -260,6 +260,8 @@ def main() -> int:
     ap.add_argument("--video-fifo", default="")
     ap.add_argument("--audio-fifo", default="")
     ap.add_argument("--stats-json", default="")
+    ap.add_argument("--stats-interval", type=int, default=0,
+                    help="print one stats line every N seconds (0 = only at exit)")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -280,6 +282,22 @@ def main() -> int:
                                               args.out, stats, fifo_a)))
     for t in threads:
         t.start()
+
+    def periodic() -> None:
+        # A ten-minute run needs a time series, not just the exit snapshot: a
+        # mid-run stall is invisible in a single total.
+        t0 = time.monotonic()
+        while not stop.wait(args.stats_interval):
+            snap = stats.as_dict()
+            log("rx: t=%ds video_frames=%d video_bytes=%d audio_blocks=%d "
+                "audio_bytes=%d crc_err=%d short=%d jpeg_bad=%d connects=%s"
+                % (int(time.monotonic() - t0), snap["video_frames"],
+                   snap["video_bytes"], snap["audio_blocks"],
+                   snap["audio_bytes"], snap["crc_err"], snap["short"],
+                   snap["jpeg_bad"], snap["connections"]))
+
+    if args.stats_interval > 0:
+        threading.Thread(target=periodic, daemon=True).start()
 
     def on_signal(_sig, _frm):
         stop.set()

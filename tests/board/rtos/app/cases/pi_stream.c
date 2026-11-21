@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "log.h"
 #include "os/cmsis2/cmsis2.h"
 
 #include "usbh_core.h"
@@ -327,6 +328,10 @@ case_pi_stream_run(void)
 	struct pi_link_info link;
 	int rc;
 
+	/* A ten-minute window outlives the DWT cycle counter's 32-bit wrap
+	 * (~25.6 s at 168 MHz); the kernel tick keeps the stamps monotonic. */
+	board_log_stamp_use_tick();
+
 	if (pi_net_up(&link) != 0) {
 		CASE_ANCHOR("stream: link join_rc=%d join_ms=%u dhcp=%d ip=%s gw=%s\n",
 			    link.join_rc, link.join_ms, link.dhcp,
@@ -364,7 +369,8 @@ case_pi_stream_run(void)
 		struct uac_stream_stats ast;
 		uint32_t start_ms;
 		uint32_t elapsed_ms;
-		uint32_t expected;
+		uint64_t expected;
+		unsigned int drop_allow;
 
 		memset(&vst, 0, sizeof(vst));
 		memset(&ast, 0, sizeof(ast));
@@ -505,6 +511,8 @@ case_pi_stream_run(void)
 		elapsed_ms = now_ms() - start_ms;
 		if (elapsed_ms == 0U)
 			elapsed_ms = 1U;
+		CASE_ANCHOR("stream: window ms=%d elapsed=%u\n",
+			    (int)CONFIG_STREAM_WINDOW_MS, elapsed_ms);
 
 #if CONFIG_STREAM_STAGE >= 4
 		usbh_uac_stream_stop();
@@ -566,8 +574,15 @@ case_pi_stream_run(void)
 			return 1;
 		}
 
+		/* The drop budget is a rate, not a count: the acceptance window's
+		 * five frames per 20 s scale with the configured window, so a
+		 * ten-minute arm is not held to a twenty-second absolute. */
+		drop_allow = 5U * (elapsed_ms / 20000U);
+		if (drop_allow == 0U) {
+			drop_allow = 5U;
+		}
 		if (vst.frames < 200U || vst.err_packets != 0U ||
-		    vst.urb_errors != 0U || vst.dropped > 5U ||
+		    vst.urb_errors != 0U || vst.dropped > drop_allow ||
 		    s_video_soi != vst.frames || s_video_eoi != vst.frames ||
 		    s_video_msgs < 190U || s_video_fail > 5U ||
 		    s_video_connects == 0U) {
@@ -584,8 +599,10 @@ case_pi_stream_run(void)
 		}
 
 #if CONFIG_STREAM_STAGE >= 4
-		expected = (ast.rate * (uint32_t)ast.channels *
-			    (uint32_t)ast.subframe * elapsed_ms) / 1000U;
+		/* 64-bit on purpose: at a ten-minute window the product of rate,
+		 * channels, subframe and elapsed overflows 32 bits. */
+		expected = ((uint64_t)ast.rate * (uint32_t)ast.channels *
+			    (uint32_t)ast.subframe * (uint64_t)elapsed_ms) / 1000U;
 		/* The sender's block count depends on the UAC urb size (one
 		 * read per completed urb), so gate on bytes and the rate
 		 * window instead of a block count. */
@@ -593,8 +610,8 @@ case_pi_stream_run(void)
 		    ast.err != 0U || ast.overrun != 0U ||
 		    s_audio_nz == 0U ||
 		    (expected != 0U &&
-		     (ast.bytes < (expected * 80U) / 100U ||
-		      ast.bytes > (expected * 120U) / 100U))) {
+		     ((uint64_t)ast.bytes < (expected * 80U) / 100U ||
+		      (uint64_t)ast.bytes > (expected * 120U) / 100U))) {
 			CASE_ANCHOR("stream: FAIL AV packets=%lu bytes=%lu gaps=%lu err=%lu overrun=%lu blocks=%lu nz=%lu\n",
 				    (unsigned long)ast.packets,
 				    (unsigned long)ast.bytes,
