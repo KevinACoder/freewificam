@@ -143,6 +143,7 @@ CASES = (
     # lease and the internet echo.  Its evidence block below checks the PHY
     # identity, the link, the lease and at least one public reply.
     "f429_eth",
+    "pi_stream",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1845,6 +1846,40 @@ PATTERNS = {
     "f429_eth_fail": re.compile(
         r"f429_eth: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    "f429_eth_tput_pass": re.compile(r"f429_eth: PASS TPUT", re.MULTILINE),
+    "f429_eth_tput_fail": re.compile(
+        r"f429_eth: FAIL TPUT phase=(?P<phase>\w+)", re.MULTILINE),
+
+    # The Pi stream, either link: the link anchor, the window the case ran,
+    # the USB-side and sender-side counters, and the verdict.
+    "pi_stream_link": re.compile(
+        r"stream: link join_rc=(?P<rc>-?\d+) join_ms=(?P<ms>\d+) "
+        r"dhcp=(?P<dhcp>[01]) ip=(?P<ip>\S+) gw=(?P<gw>\S+)", re.MULTILINE),
+    "pi_stream_window": re.compile(
+        r"stream: window ms=(?P<ms>\d+) elapsed=(?P<elapsed>\d+)",
+        re.MULTILINE),
+    "pi_stream_uvc": re.compile(
+        r"stream: rx uvc frames=(?P<frames>\d+) bytes=(?P<bytes>\d+) "
+        r"soi=(?P<soi>\d+) eoi=(?P<eoi>\d+) max=(?P<max>\d+) "
+        r"dropped=(?P<dropped>\d+) invalid=(?P<invalid>\d+) "
+        r"err=(?P<err>\d+) urb_err=(?P<urb_err>\d+)", re.MULTILINE),
+    "pi_stream_video_tx": re.compile(
+        r"stream: tx video frames=(?P<frames>\d+) msgs=(?P<msgs>\d+) "
+        r"bytes=(?P<bytes>\d+) drops=(?P<drops>\d+) "
+        r"connects=(?P<connects>\d+) fail=(?P<fail>\d+)", re.MULTILINE),
+    "pi_stream_uac": re.compile(
+        r"stream: rx uac rate=(?P<rate>\d+) ch=(?P<ch>\d+) "
+        r"packets=(?P<packets>\d+) bytes=(?P<bytes>\d+) "
+        r"gaps=(?P<gaps>\d+) first=(?P<first>\d+) max=(?P<max>\d+) "
+        r"err=(?P<err>\d+) overrun=(?P<overrun>\d+) nz=(?P<nz>\d+) "
+        r"peak=(?P<peak>\d+)", re.MULTILINE),
+    "pi_stream_audio_tx": re.compile(
+        r"stream: tx audio blocks=(?P<blocks>\d+) bytes=(?P<bytes>\d+) "
+        r"drops=(?P<drops>\d+) connects=(?P<connects>\d+) "
+        r"fail=(?P<fail>\d+)", re.MULTILINE),
+    "pi_stream_pass_av": re.compile(r"stream: PASS AV", re.MULTILINE),
+    "pi_stream_fail": re.compile(
+        r"stream: FAIL (?P<reason>.+)$", re.MULTILINE),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -1853,6 +1888,14 @@ PATTERNS = {
 LIST_PATTERNS = {
     # F429 wired Ethernet: one line per ping target (the gateway and every
     # public target tried), so the gate can read all of them.
+    "f429_eth_tput_tcp": re.compile(
+        r"f429_eth: tput (?P<name>tcpdn|tcpup) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) aborted=(?P<aborted>[01])",
+        re.MULTILINE),
+    "f429_eth_tput_udp": re.compile(
+        r"f429_eth: tput (?P<name>udpdn|udpup) pkts=(?P<pkts>\d+) "
+        r"bytes=(?P<bytes>\d+)(?: ms=(?P<ms>\d+))? kbit=(?P<kbit>\d+)",
+        re.MULTILINE),
     "f429_eth_ping": re.compile(
         r"f429_eth: ping dst=(?P<dst>[\d.]+) tx=(?P<tx>\d+) "
         r"rx=(?P<rx>\d+) min=(?P<min>\d+) avg=(?P<avg>\d+) "
@@ -6199,23 +6242,65 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"f429_eth: dhcp {dhcp['ip']} gw={dhcp['gw']} "
                 f"({dhcp['ms']} ms)")
 
-        pings = found["f429_eth_ping"]
-        gateway = dhcp["gw"] if dhcp else None
-        public = [row for row in pings if row["dst"] != gateway]
-        answered = [row for row in public if int(row["rx"]) >= 9]
-        if not answered:
-            errors.append(
-                "f429_eth: no public echo reply with rx>=9 "
-                f"({len(public)} target(s) tried)")
+        if found["f429_eth_tput_pass"]:
+            # The throughput arm: the four phase lines are the evidence, and
+            # the internet ladder's lines (gateway, DNS, public echo) are not
+            # part of this arm.
+            if found["f429_eth_pass"]:
+                errors.append(
+                    "f429_eth: both PASS TPUT and PASS DATA are present")
+            tfail = found["f429_eth_tput_fail"]
+            if tfail:
+                errors.append(f"f429_eth: FAIL TPUT phase={tfail['phase']}")
+            tcp = found["f429_eth_tput_tcp"]
+            udp = found["f429_eth_tput_udp"]
+            names = {row["name"] for row in tcp} | {row["name"] for row in udp}
+            if names != {"tcpdn", "tcpup", "udpdn", "udpup"}:
+                errors.append(
+                    "f429_eth: PASS TPUT without all four phase lines "
+                    f"({sorted(names)})")
+            for row in tcp:
+                if row["aborted"] != "0":
+                    errors.append(
+                        f"f429_eth: {row['name']} aborted={row['aborted']}")
+                if int(row["bytes"]) == 0:
+                    errors.append(f"f429_eth: {row['name']} moved 0 bytes")
+                notes.append(
+                    f"f429_eth: {row['name']} {row['kbit']} kbit/s "
+                    f"({row['bytes']} B in {row['ms']} ms)")
+            for row in udp:
+                if int(row["bytes"]) == 0:
+                    errors.append(f"f429_eth: {row['name']} moved 0 bytes")
+                ms = f" in {row['ms']} ms" if row.get("ms") else ""
+                notes.append(
+                    f"f429_eth: {row['name']} {row['kbit']} kbit/s "
+                    f"({row['pkts']} pkts, {row['bytes']} B{ms})")
+            notes.append(
+                "f429_eth: phase set complete (tcpdn tcpup udpdn udpup)")
         else:
-            first = answered[0]
-            notes.append(
-                f"f429_eth: internet via {first['dst']} "
-                f"{first['rx']}/{first['tx']} rtt {first['avg']} ms")
-        for row in pings:
-            notes.append(
-                f"f429_eth: ping {row['dst']} {row['rx']}/{row['tx']} "
-                f"rtt {row['min']}/{row['avg']}/{row['max']} ms")
+            pings = found["f429_eth_ping"]
+            gateway = dhcp["gw"] if dhcp else None
+            public = [row for row in pings if row["dst"] != gateway]
+            answered = [row for row in public if int(row["rx"]) >= 9]
+            if not answered:
+                errors.append(
+                    "f429_eth: no public echo reply with rx>=9 "
+                    f"({len(public)} target(s) tried)")
+            else:
+                first = answered[0]
+                notes.append(
+                    f"f429_eth: internet via {first['dst']} "
+                    f"{first['rx']}/{first['tx']} rtt {first['avg']} ms")
+            for row in pings:
+                notes.append(
+                    f"f429_eth: ping {row['dst']} {row['rx']}/{row['tx']} "
+                    f"rtt {row['min']}/{row['avg']}/{row['max']} ms")
+
+            if not found["f429_eth_pass"]:
+                errors.append("f429_eth: the PASS DATA line is missing")
+            tfail = found["f429_eth_tput_fail"]
+            if tfail:
+                errors.append(f"f429_eth: FAIL TPUT phase={tfail['phase']}")
 
         stats = found["f429_eth_stats"]
         if stats:
@@ -6224,8 +6309,113 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"len_err={stats['len']} copy_err={stats['copy']} "
                 f"missed={stats['missed']}")
 
-        if not found["f429_eth_pass"]:
-            errors.append("f429_eth: the PASS DATA line is missing")
+    if cases.get("pi_stream", {}).get("verdict") == "pass":
+        # The stage-4 arm: video and audio both reached the Pi.  The window
+        # line is what separates a ten-minute stability run from the 20 s
+        # acceptance window; the USB-side and sender-side counters are the
+        # evidence that the window was actually carried.
+        fail = found["pi_stream_fail"]
+        if fail:
+            errors.append(f"pi_stream: {fail['reason']}")
+        link = found["pi_stream_link"]
+        if not link:
+            errors.append("pi_stream: PASS without a link line")
+        elif int(link["rc"]) != 0:
+            errors.append(f"pi_stream: link join_rc={link['rc']}")
+        elif link["dhcp"] != "1":
+            errors.append("pi_stream: the link did not take a DHCP lease")
+        else:
+            notes.append(
+                f"pi_stream: link {link['ip']} gw={link['gw']} "
+                f"({link['ms']} ms)")
+
+        window = found["pi_stream_window"]
+        if not window:
+            errors.append("pi_stream: PASS without a window line")
+        else:
+            ms = int(window["ms"])
+            elapsed = int(window["elapsed"])
+            if ms <= 0:
+                errors.append(f"pi_stream: window ms={ms}")
+            elif elapsed < ms:
+                errors.append(
+                    f"pi_stream: window ran {elapsed} ms of {ms} ms")
+            else:
+                notes.append(
+                    f"pi_stream: window {ms / 1000.0:.1f} s "
+                    f"(elapsed {elapsed / 1000.0:.1f} s)")
+
+        uvc = found["pi_stream_uvc"]
+        if not uvc:
+            errors.append("pi_stream: PASS without the UVC counter line")
+        else:
+            frames = int(uvc["frames"])
+            if frames == 0:
+                errors.append("pi_stream: no UVC frames")
+            if uvc["soi"] != uvc["frames"] or uvc["eoi"] != uvc["frames"]:
+                errors.append(
+                    f"pi_stream: SOI/EOI {uvc['soi']}/{uvc['eoi']} of "
+                    f"{frames} frames")
+            if int(uvc["err"]) != 0:
+                errors.append(f"pi_stream: USB errors {uvc['err']}")
+            if int(uvc["urb_err"]) != 0:
+                errors.append(f"pi_stream: URB errors {uvc['urb_err']}")
+            # The board's budget is a rate (5 per 20 s of window); the judge
+            # reads the window the case reported and scales the same way.
+            win_ms = int(window["ms"]) if window else 0
+            allow = 5 * max(1, win_ms // 20000)
+            if int(uvc["dropped"]) > allow:
+                errors.append(
+                    f"pi_stream: dropped {uvc['dropped']} frames "
+                    f"(budget {allow} for {win_ms} ms)")
+            notes.append(
+                f"pi_stream: uvc {frames} frames, {uvc['bytes']} B, "
+                f"dropped {uvc['dropped']}, err {uvc['err']}")
+
+        vtx = found["pi_stream_video_tx"]
+        if not vtx:
+            errors.append("pi_stream: PASS without the video sender line")
+        else:
+            if int(vtx["msgs"]) == 0:
+                errors.append("pi_stream: the video sender sent no message")
+            if int(vtx["fail"]) != 0:
+                errors.append(f"pi_stream: video send failures {vtx['fail']}")
+            if int(vtx["connects"]) < 1:
+                errors.append("pi_stream: the video sender never connected")
+            notes.append(
+                f"pi_stream: video {vtx['msgs']} msgs, {vtx['bytes']} B, "
+                f"connects {vtx['connects']}, fail {vtx['fail']}")
+
+        uac = found["pi_stream_uac"]
+        if not uac:
+            errors.append("pi_stream: PASS without the UAC counter line")
+        else:
+            if int(uac["bytes"]) == 0:
+                errors.append("pi_stream: no microphone bytes")
+            if int(uac["gaps"]) != 0:
+                errors.append(f"pi_stream: UAC gaps {uac['gaps']}")
+            if int(uac["err"]) != 0:
+                errors.append(f"pi_stream: UAC errors {uac['err']}")
+            if int(uac["overrun"]) != 0:
+                errors.append(f"pi_stream: UAC overruns {uac['overrun']}")
+            notes.append(
+                f"pi_stream: uac {uac['rate']} Hz {uac['ch']} ch, "
+                f"{uac['bytes']} B, gaps {uac['gaps']}")
+
+        atx = found["pi_stream_audio_tx"]
+        if not atx:
+            errors.append("pi_stream: PASS without the audio sender line")
+        else:
+            if int(atx["bytes"]) == 0:
+                errors.append("pi_stream: the audio sender sent no bytes")
+            if int(atx["fail"]) != 0:
+                errors.append(f"pi_stream: audio send failures {atx['fail']}")
+            notes.append(
+                f"pi_stream: audio {atx['blocks']} blocks, {atx['bytes']} B, "
+                f"fail {atx['fail']}")
+
+        if not found["pi_stream_pass_av"]:
+            errors.append("pi_stream: the PASS AV line is missing")
 
     result = found["result"]
     if not result:

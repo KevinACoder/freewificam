@@ -1,0 +1,29 @@
+# F429 wired Ethernet - iperf throughput ladder (bring-up tier).
+#
+# The same image as stm32f429-eth, with the case's throughput arm:
+# TCP down/up through lwiperf and UDP down/up against the Pi's iperf2.
+# The stack tier is the bring-up tier on purpose: this arm is the
+# baseline the measurement tier is compared against.
+# See docs/F429-ETH.md.
+
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=262144
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_LWIP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=16
+CONFIG_ETH_WIRED=y
+CONFIG_LWIP_MEM_SIZE_KB=255
+CONFIG_LWIP_PBUF_POOL_SIZE=24
+CONFIG_LWIP_TCP_WND=16384
+CONFIG_LWIP_TCP_SND_BUF=16384
+CONFIG_CASES="f429_eth"
+CONFIG_F429_ETH_TPUT=y
+CONFIG_F429_ETH_TPUT_PEER="192.168.0.17"
+CONFIG_F429_ETH_TPUT_UDP_MBIT=90

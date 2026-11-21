@@ -411,6 +411,62 @@ config LWIP_DNS
 	  to show a name resolving through the router, as a report-only line
 	  beside the internet gate (which is an IP echo reply, not a lookup).
 
+
+# --- F429 wired Ethernet -----------------------------------------------------
+#
+# The world, not the case: one switch turns on the board seam over the
+# imported ST HAL ETH driver, the lwIP netif bridge and the lwIP port face.
+# The f429_eth profiles and the wired-stream profile set it; the wireless
+# E429 profiles do not, so neither the HAL nor the ETH bridge reaches them.
+
+config ETH_WIRED
+	bool "F429 wired-Ethernet world (ST HAL ETH + board seam + lwIP bridge)"
+	default n
+	help
+	  Compiles platform/board/stm32f429-challenger/eth.c over the imported
+	  STM32F4 HAL ETH driver, third-party/lwip/ports/stm32eth_netif.c, and
+	  the lwIP port face.  Independent of which case consumes it.
+
+config F429_ETH_TPUT
+	bool "f429_eth runs the iperf throughput ladder"
+	default n
+	depends on ETH_WIRED
+	help
+	  After the link and the lease, run four measured phases instead of the
+	  internet ladder: TCP down (the board's lwiperf server, the peer's
+	  iperf2 client), TCP up (the board's lwiperf client), UDP down (the
+	  board's counting sink behind the peer's iperf2 UDP stream) and UDP up
+	  (a paced blast from the board to the peer's iperf2 UDP server).  The
+	  numbers are report-only; the verdict line is PASS TPUT.
+
+config F429_ETH_TPUT_PEER
+	string "throughput peer address (the Pi 4B)"
+	default "192.168.0.17"
+	depends on F429_ETH_TPUT
+	help
+	  The peer that runs iperf2.  The image dials it for the two uplink
+	  phases and accepts it for the two downlink phases.
+
+config F429_ETH_TPUT_UDP_MBIT
+	int "throughput UDP uplink offered rate (Mbit/s)"
+	range 1 100
+	default 90
+	depends on F429_ETH_TPUT
+	help
+	  What the board offers in the UDP uplink phase; the peer's iperf2 UDP
+	  server is the truth for what arrived.  90 is the line-rate arm for a
+	  100 Mbit/s PHY (94 is the wire's frame-level ceiling).
+
+config STREAM_LINK_ETH
+	bool "Pi stream over the wired Ethernet link"
+	default n
+	depends on ETH_WIRED
+	help
+	  pi_net's implementation is eth_net.c over the board's LAN8720A instead
+	  of the AP6181's WICED half: the stream profile takes a DHCP lease from
+	  the router and sends to the Pi's wired address.  The camera half is
+	  unchanged; the profile and the peer address are the only differences.
+
 endmenu
 
 endmenu

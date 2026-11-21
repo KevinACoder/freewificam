@@ -34,6 +34,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "log.h"
 
 #include "eth.h"
 #include "stm32eth_netif.h"
@@ -51,6 +52,10 @@
 #include "lwip/dns.h"
 #include "lwip/tcpip.h"
 #include "lwip/sys.h"
+#if CONFIG_F429_ETH_TPUT
+#include "lwip/udp.h"
+#include "lwip/apps/lwiperf.h"
+#endif
 
 #include "arch/sys_arch.h"
 
@@ -69,23 +74,27 @@
 #define ETH_DNS_WAIT_MS		5000U
 #define ETH_DNS_NAME		"www.baidu.com"
 
+#if !CONFIG_F429_ETH_TPUT
 static const char *const eth_public_targets[] = {
 	"223.5.5.5",
 	"119.29.29.29",
 	"8.8.8.8",
 	"1.1.1.1",
 };
+#endif
 
 static struct netif s_netif;
 static struct stm32eth_netif_stats s_bridge_stats;
 static osThreadId_t s_rx_thread;
 
+#if !CONFIG_F429_ETH_TPUT
 /* --- one raw ICMP pcb for every round in this boot ------------------------ */
 
 static struct raw_pcb *s_ping_pcb;
 static ip_addr_t s_ping_dst;
 static volatile unsigned s_ping_rx;
 static volatile uint16_t s_ping_expected;
+#endif /* !CONFIG_F429_ETH_TPUT */
 
 static void eth_reason(const char *reason)
 {
@@ -117,6 +126,7 @@ static void eth_rx_thread(void *arg)
 	}
 }
 
+#if !CONFIG_F429_ETH_TPUT
 /* --- ping ----------------------------------------------------------------- */
 
 static u8_t eth_ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
@@ -274,6 +284,8 @@ static int eth_ping(const char *dst, unsigned int count, unsigned int *tx_out,
 	*max_out = rtt_max;
 	return (rx != 0U) ? 0 : -1;
 }
+
+#endif /* !CONFIG_F429_ETH_TPUT */
 
 /* --- name resolution (report only) ---------------------------------------- */
 
@@ -467,6 +479,7 @@ static int eth_dhcp(void)
 	return -1;
 }
 
+#if !CONFIG_F429_ETH_TPUT
 static int eth_lease_strs(char *ip, unsigned int ip_cap, char *gw,
 			  unsigned int gw_cap)
 {
@@ -503,7 +516,315 @@ static void eth_print_arp(const char *gw)
 	UNLOCK_TCPIP_CORE();
 }
 
-int case_f429_eth_run(void)
+#endif /* !CONFIG_F429_ETH_TPUT */
+
+/* --- the throughput arm --------------------------------------------------- */
+
+#if CONFIG_F429_ETH_TPUT
+/*
+ * Four measured phases against the Pi's iperf 2.2.1, one anchor per phase.
+ * The peers are driven by the round script from the `ready` lines: the two
+ * downlink phases have the board as server, so the script runs the peer's
+ * client when it sees the line; the two uplink phases have the peer as server,
+ * which the script starts before the boot, so the board dials it when ready.
+ *
+ * The numbers are report-only; `PASS TPUT` means all four phases moved bytes,
+ * not that any particular rate was reached.  The line's ceiling is 100 Mbit/s;
+ * the peer's own iperf2 report is the egress truth for the uplink phases.
+ */
+#define ETH_TPUT_TCP_WAIT_MS	30000U
+#define ETH_TPUT_UDP_DN_MS	12000U
+#define ETH_TPUT_UDP_UP_MS	10000U
+#define ETH_TPUT_UDP_LEN	1400U
+#define ETH_TPUT_UDP_DN_PORT	5002U
+
+static volatile int s_tp_done;
+static volatile int s_tp_aborted;
+static volatile uint32_t s_tp_bytes;
+static volatile uint32_t s_tp_ms;
+static volatile uint32_t s_tp_kbit;
+static volatile uint32_t s_tp_udp_pkts;
+static volatile uint32_t s_tp_udp_bytes;
+
+static void eth_tput_report(void *arg, enum lwiperf_report_type type,
+			    const ip_addr_t *local_addr, u16_t local_port,
+			    const ip_addr_t *remote_addr, u16_t remote_port,
+			    u32_t bytes, u32_t ms, u32_t kbitpsec)
+{
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+
+	if (type == LWIPERF_TCP_DONE_SERVER ||
+	    type == LWIPERF_TCP_DONE_CLIENT) {
+		s_tp_bytes = bytes;
+		s_tp_ms = ms;
+		s_tp_kbit = kbitpsec;
+	} else {
+		s_tp_aborted = 1;
+	}
+	s_tp_done = 1;
+}
+
+static int eth_tput_wait(uint32_t timeout_ms)
+{
+	uint32_t waited = 0U;
+
+	while (!s_tp_done) {
+		if (waited >= timeout_ms) {
+			return -1;
+		}
+		(void)osDelay(50U);
+		waited += 50U;
+	}
+	return 0;
+}
+
+static int eth_tput_tcp_down(void)
+{
+	s_tp_done = 0;
+	s_tp_aborted = 0;
+	s_tp_bytes = 0U;
+	s_tp_ms = 0U;
+	s_tp_kbit = 0U;
+	CASE_ANCHOR("f429_eth: tput tcpdn ready port=5001\n");
+	if (eth_tput_wait(ETH_TPUT_TCP_WAIT_MS) != 0) {
+		CASE_ANCHOR("f429_eth: tput tcpdn timeout\n");
+		return -1;
+	}
+	CASE_ANCHOR("f429_eth: tput tcpdn bytes=%lu ms=%lu kbit=%lu aborted=%d\n",
+		    (unsigned long)s_tp_bytes, (unsigned long)s_tp_ms,
+		    (unsigned long)s_tp_kbit, s_tp_aborted);
+	return (s_tp_aborted == 0 && s_tp_bytes != 0U) ? 0 : -1;
+}
+
+static int eth_tput_tcp_up(void)
+{
+	ip4_addr_t peer;
+	ip_addr_t dst;
+	void *client;
+
+	if (!ip4addr_aton(CONFIG_F429_ETH_TPUT_PEER, &peer)) {
+		CASE_ANCHOR("f429_eth: tput tcpup bad peer %s\n",
+			    CONFIG_F429_ETH_TPUT_PEER);
+		return -1;
+	}
+	ip_addr_copy_from_ip4(dst, peer);
+
+	s_tp_done = 0;
+	s_tp_aborted = 0;
+	s_tp_bytes = 0U;
+	s_tp_ms = 0U;
+	s_tp_kbit = 0U;
+	CASE_ANCHOR("f429_eth: tput tcpup ready peer=%s port=5001\n",
+		    CONFIG_F429_ETH_TPUT_PEER);
+	/* The peer's iperf2 server runs from before the boot; the short wait
+	 * only keeps the two anchors apart for the driver. */
+	(void)osDelay(300U);
+	LOCK_TCPIP_CORE();
+	client = lwiperf_start_tcp_client_default(&dst, eth_tput_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (client == NULL) {
+		CASE_ANCHOR("f429_eth: tput tcpup client start failed\n");
+		return -1;
+	}
+	if (eth_tput_wait(ETH_TPUT_TCP_WAIT_MS) != 0) {
+		CASE_ANCHOR("f429_eth: tput tcpup timeout\n");
+		return -1;
+	}
+	CASE_ANCHOR("f429_eth: tput tcpup bytes=%lu ms=%lu kbit=%lu aborted=%d\n",
+		    (unsigned long)s_tp_bytes, (unsigned long)s_tp_ms,
+		    (unsigned long)s_tp_kbit, s_tp_aborted);
+	return (s_tp_aborted == 0 && s_tp_bytes != 0U) ? 0 : -1;
+}
+
+static void eth_tput_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+			      const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p == NULL) {
+		return;
+	}
+	s_tp_udp_pkts++;
+	s_tp_udp_bytes += p->tot_len;
+	pbuf_free(p);
+}
+
+static int eth_tput_udp_down(void)
+{
+	struct udp_pcb *pcb;
+	uint32_t waited = 0U;
+
+	pcb = udp_new();
+	if (pcb == NULL) {
+		CASE_ANCHOR("f429_eth: tput udpdn no pcb\n");
+		return -1;
+	}
+	LOCK_TCPIP_CORE();
+	if (udp_bind(pcb, IP_ADDR_ANY, ETH_TPUT_UDP_DN_PORT) != ERR_OK) {
+		UNLOCK_TCPIP_CORE();
+		udp_remove(pcb);
+		CASE_ANCHOR("f429_eth: tput udpdn bind failed\n");
+		return -1;
+	}
+	udp_recv(pcb, eth_tput_udp_recv, NULL);
+	UNLOCK_TCPIP_CORE();
+
+	s_tp_udp_pkts = 0U;
+	s_tp_udp_bytes = 0U;
+	CASE_ANCHOR("f429_eth: tput udpdn ready port=%u\n",
+		    (unsigned)ETH_TPUT_UDP_DN_PORT);
+	while (waited < ETH_TPUT_UDP_DN_MS) {
+		(void)osDelay(100U);
+		waited += 100U;
+	}
+	LOCK_TCPIP_CORE();
+	udp_remove(pcb);
+	UNLOCK_TCPIP_CORE();
+	CASE_ANCHOR("f429_eth: tput udpdn pkts=%lu bytes=%lu kbit=%lu\n",
+		    (unsigned long)s_tp_udp_pkts, (unsigned long)s_tp_udp_bytes,
+		    (unsigned long)((ETH_TPUT_UDP_DN_MS != 0U) ?
+			((uint32_t)(((uint64_t)s_tp_udp_bytes * 8U * 1000U) /
+				    ((uint64_t)ETH_TPUT_UDP_DN_MS * 1000U))) :
+			0U));
+	return (s_tp_udp_pkts != 0U && s_tp_udp_bytes != 0U) ? 0 : -1;
+}
+
+static int eth_tput_udp_up(void)
+{
+	ip4_addr_t peer;
+	ip_addr_t dst;
+	struct udp_pcb *pcb;
+	struct pbuf *p;
+	uint32_t t0;
+	uint32_t waited = 0U;
+	uint32_t pkts = 0U;
+	uint32_t bytes = 0U;
+	uint32_t per_ms;
+
+	if (!ip4addr_aton(CONFIG_F429_ETH_TPUT_PEER, &peer)) {
+		CASE_ANCHOR("f429_eth: tput udpup bad peer %s\n",
+			    CONFIG_F429_ETH_TPUT_PEER);
+		return -1;
+	}
+	ip_addr_copy_from_ip4(dst, peer);
+
+	pcb = udp_new();
+	p = pbuf_alloc(PBUF_TRANSPORT, ETH_TPUT_UDP_LEN, PBUF_RAM);
+	if (pcb == NULL || p == NULL) {
+		if (p != NULL) {
+			pbuf_free(p);
+		}
+		if (pcb != NULL) {
+			udp_remove(pcb);
+		}
+		CASE_ANCHOR("f429_eth: tput udpup no pcb/pbuf\n");
+		return -1;
+	}
+	memset(p->payload, 0x5a, ETH_TPUT_UDP_LEN);
+	LOCK_TCPIP_CORE();
+	if (udp_connect(pcb, &dst, ETH_TPUT_UDP_DN_PORT) != ERR_OK) {
+		UNLOCK_TCPIP_CORE();
+		pbuf_free(p);
+		udp_remove(pcb);
+		CASE_ANCHOR("f429_eth: tput udpup connect failed\n");
+		return -1;
+	}
+	UNLOCK_TCPIP_CORE();
+
+	/* Offered rate in datagrams per millisecond; the peer's iperf2 UDP
+	 * server is the truth for what arrived. */
+	per_ms = ((uint32_t)CONFIG_F429_ETH_TPUT_UDP_MBIT * 1000U) /
+		 (8U * ETH_TPUT_UDP_LEN);
+	if (per_ms == 0U) {
+		per_ms = 1U;
+	}
+	CASE_ANCHOR("f429_eth: tput udpup ready peer=%s port=%u rate_mbit=%u\n",
+		    CONFIG_F429_ETH_TPUT_PEER, (unsigned)ETH_TPUT_UDP_DN_PORT,
+		    (unsigned)CONFIG_F429_ETH_TPUT_UDP_MBIT);
+
+	t0 = osKernelGetTickCount();
+	while (waited < ETH_TPUT_UDP_UP_MS) {
+		uint32_t i;
+
+		for (i = 0U; i < per_ms; i++) {
+			LOCK_TCPIP_CORE();
+			if (udp_sendto(pcb, p, &dst, ETH_TPUT_UDP_DN_PORT) ==
+			    ERR_OK) {
+				pkts++;
+				bytes += ETH_TPUT_UDP_LEN;
+			}
+			UNLOCK_TCPIP_CORE();
+		}
+		(void)osDelay(1U);
+		waited = osKernelGetTickCount() - t0;
+	}
+	pbuf_free(p);
+	udp_remove(pcb);
+	CASE_ANCHOR("f429_eth: tput udpup pkts=%lu bytes=%lu ms=%lu kbit=%lu\n",
+		    (unsigned long)pkts, (unsigned long)bytes,
+		    (unsigned long)waited,
+		    (unsigned long)((waited != 0U) ?
+			((uint32_t)(((uint64_t)bytes * 8U * 1000U) /
+				    ((uint64_t)waited * 1000U))) : 0U));
+	return (pkts != 0U && bytes != 0U) ? 0 : -1;
+}
+
+static int eth_tput_run(void)
+{
+	struct f429_eth_stats stats;
+	const char *phase = "setup";
+	int rc;
+
+	LOCK_TCPIP_CORE();
+	if (lwiperf_start_tcp_server_default(eth_tput_report, NULL) == NULL) {
+		UNLOCK_TCPIP_CORE();
+		eth_reason("throughput lwiperf server start failed");
+		return -1;
+	}
+	UNLOCK_TCPIP_CORE();
+
+	phase = "tcpdn";
+	rc = eth_tput_tcp_down();
+	if (rc == 0) {
+		phase = "tcpup";
+		rc = eth_tput_tcp_up();
+	}
+	if (rc == 0) {
+		phase = "udpdn";
+		rc = eth_tput_udp_down();
+	}
+	if (rc == 0) {
+		phase = "udpup";
+		rc = eth_tput_udp_up();
+	}
+	if (rc != 0) {
+		CASE_ANCHOR("f429_eth: FAIL TPUT phase=%s\n", phase);
+		return -1;
+	}
+
+	f429_eth_stats_snapshot(&stats);
+	stm32eth_netif_stats_snapshot(&s_bridge_stats);
+	CASE_ANCHOR("f429_eth: stats rx=%lu tx=%lu len_err=%lu copy_err=%lu "
+		    "tx_busy=%lu missed=%lu\n",
+		    stats.rx_frames, stats.tx_frames, stats.rx_len_err,
+		    stats.rx_copy_err, stats.tx_busy, stats.dma_missed);
+	CASE_ANCHOR("f429_eth: bridge fed=%lu pbuf_fail=%lu input_fail=%lu "
+		    "tx_drop=%lu\n",
+		    s_bridge_stats.rx_fed, s_bridge_stats.rx_pbuf_fail,
+		    s_bridge_stats.rx_input_fail, s_bridge_stats.tx_drop);
+	CASE_ANCHOR("f429_eth: PASS TPUT\n");
+	return 0;
+}
+#endif /* CONFIG_F429_ETH_TPUT */
+
+#if !CONFIG_F429_ETH_TPUT
+static int eth_delivery_run(void)
 {
 	struct f429_eth_stats stats;
 	char ip[16];
@@ -587,4 +908,23 @@ int case_f429_eth_run(void)
 
 	CASE_ANCHOR("f429_eth: PASS DATA\n");
 	return 0;
+}
+#endif /* !CONFIG_F429_ETH_TPUT */
+
+int case_f429_eth_run(void)
+{
+	/* The arm's phases run past the DWT cycle counter's 32-bit wrap
+	 * (~25.6 s at 168 MHz); the kernel tick keeps the stamps monotonic. */
+	board_log_stamp_use_tick();
+#if CONFIG_F429_ETH_TPUT
+	if (eth_bring_up() != 0) {
+		return -1;
+	}
+	if (eth_dhcp() != 0) {
+		return -1;
+	}
+	return eth_tput_run();
+#else
+	return eth_delivery_run();
+#endif
 }

@@ -263,7 +263,14 @@ endif
 # per-case group below adds that NIC's own netif bridge and driver. A boot may
 # carry more than one (they share one stack bring-up).
 LWIP_CASES := net net_xmac net_mdk_netio net_loop net_pps f429_eth
-ifneq ($(filter $(LWIP_CASES),$(CASES)),)
+# The wired world brings the port face even when its case is not f429_eth: the
+# wired-stream profile's case is pi_stream, and its sockets need the stack.
+ifeq ($(CONFIG_ETH_WIRED),1)
+LWIP_NEEDED := eth
+else
+LWIP_NEEDED := $(filter $(LWIP_CASES),$(CASES))
+endif
+ifneq ($(strip $(LWIP_NEEDED)),)
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \

@@ -79,7 +79,7 @@ endif
 # base and the frame-level seam).  Compiled only for the f429_eth image: every
 # other F429 image must not link the HAL or its station buffers.
 ifeq ($(SRC_TAG),eth)
-ifneq ($(filter f429_eth,$(CASES)),)
+ifeq ($(CONFIG_ETH_WIRED),1)
 ifeq ($(BOARD),stm32f429-challenger)
 obj-y += stm32f429-challenger/eth.c
 endif

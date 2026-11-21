@@ -5,7 +5,8 @@
 # Included by the platform Makefile right after the board selection, before
 # INCLUDES is expanded: the HAL's include roots have to be on the search path
 # for the board glue and for the HAL's own two sources.  Everything here is
-# empty unless the image's case list carries `f429_eth`.
+# empty unless the profile sets CONFIG_ETH_WIRED (the f429_eth and the
+# wired-stream profiles do; the wireless ones do not).
 #
 # The HAL sources compile in the vendored flag world (CFLAGS minus -Wextra,
 # the same discipline as the other imported trees): they are ST's code and
@@ -19,7 +20,7 @@
 
 ETH_HAL := $(ROOT)/third-party/stm32f4xx-hal
 
-ifneq ($(filter f429_eth,$(CASES)),)
+ifeq ($(CONFIG_ETH_WIRED),1)
 ifeq ($(BOARD),stm32f429-challenger)
 BOARD_INCLUDES += \
 	-I$(ETH_HAL)/CMSIS/Device/ST/STM32F4xx/Include \
@@ -27,5 +28,10 @@ BOARD_INCLUDES += \
 	-I$(ETH_HAL)/STM32F4xx_HAL_Driver/Inc
 ETH_HAL_SRCS := $(ETH_HAL)/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_eth.c
 ETH_NETIF_SRCS := $(THIRD_PARTY)/lwip/ports/stm32eth_netif.c
+# The wired-stream profile replaces pi_net.c's WICED half with this one; it
+# implements the same pi_net.h over the board seam and lwIP's sockets.
+ifeq ($(CONFIG_STREAM_LINK_ETH),1)
+ETH_NETIF_SRCS += $(LINE)/app/stream/eth_net.c
+endif
 endif
 endif

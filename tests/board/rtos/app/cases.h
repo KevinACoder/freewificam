@@ -281,8 +281,8 @@ int case_rtl8xxxu_c6_run(void);
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its
  * own stack up; the helper is kept for the wired arms that share a boot. */
-#if defined(RTOS_CASE_NET)
 int case_net_stack_up(void);
+#if defined(RTOS_CASE_NET)
 void case_net_lwiperf_server_start(void);
 #endif
 
