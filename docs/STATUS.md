@@ -4,6 +4,12 @@
 > F429 UVC camera parameters and results: [F429-UVC.md](F429-UVC.md).
 > F429 UAC microphone parameters and results: [F429-UAC.md](F429-UAC.md).
 
+- Updated: 2026-11-21 (F429 RTC and system date/time: the core board's
+  32.768 kHz LSE and the base board's CR1220 drive a first-party calendar;
+  `rtos_time_*` and newlib's `time()` read it.  The `stm32f429-rtc` image
+  passed a fresh-domain cold boot, a pin reset (boot counter 1->2,
+  `persist dt=37 s`) and a relay cold boot (boot 3, battery retained).
+  Details in [F429-RTC.md](F429-RTC.md))
 - Updated: 2026-11-21 (F429 wired Ethernet, two follow-ups.  iperf2: TCP
   14-22 Mbit/s down / 17-20 up, UDP 25-27 received and 12.7 sent - 14-27% of
   the 100 Mbit/s line, so it is not saturated; the measurement tier gave no
@@ -173,3 +179,27 @@ zero-length packets until its video function has been claimed.  The two
 isochronous endpoints share the DWC2 host's 12 channels; the video stream is
 not degraded by the microphone.  Details, descriptor bytes, the engine's
 contract and the reproduce commands are in `docs/F429-UAC.md`.
+
+## F429 RTC and system date/time (2026-11-21)
+
+The STM32F429's RTC runs from the core board's 32.768 kHz Y2 crystal; the
+base board's CR1220 holds VBAT, so the calendar survives a power cut when the
+battery is fitted.  The driver is first-party register code (LSE first, LSI
+fallback), and `app/rtos_time.c` exposes the epoch, calendar, UTC/local
+formatting and a newlib `_gettimeofday` seam.  `stm32f429-rtc` (case `rtc`)
+was accepted with one image (BIN sha256 `2882f034…`, build tag `c963821`):
+
+| Boot | Reset | Result |
+|---|---|---|
+| 1 | RTC domain cleared, relay cold boot | `boot=1 configured=0`, default written, LSE 127/255, set/readback exact, `PASS` |
+| 2 | pyOCD reset, no reflash | `boot=2 configured=1`, `persist last=1767323045 now=1767323082 dt=37 ok=1`, `PASS` |
+| 3 | relay cold boot, no reflash | `boot=3` (battery retained), `persist dt=31 ok=1`, `PASS` |
+
+The case gates the LSE source, the 127/255 prescaler, eight date/epoch round
+trips (including leap days, 2038-01-19 and 2099-12-31), the exact
+set/readback pair, the second counter and `time()`; persistence is printed and
+judged at the run level.  The date register latches at the next calendar
+update, so a set that changes the date takes up to ~2 s on its first attempt
+(the case retries; a same-date set returns in ~10 ms).  Details, the backup
+schema, the foreign-calendar policy and the failure table are in
+[F429-RTC.md](F429-RTC.md).

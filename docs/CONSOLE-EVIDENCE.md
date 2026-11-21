@@ -1887,3 +1887,75 @@ What it does not prove: that the 0.01-0.65% engine drops are zero under every
 scene (they are queue overflows, not transport errors), or anything about
 throughput - the window runs at ~2.3 Mbit/s of video and 256 kbit/s of audio,
 far below the link's measured ceiling (section 7 of F429-ETH.md).
+
+## STM32F429 RTC — the calendar and the system date/time (2026-11-21)
+
+Profile `stm32f429-rtc`, case `rtc`.  The core board's 32.768 kHz crystal
+(Y2) is the RTC source; the base board's CR1220 holds `VBAT`.  The RTC domain
+was cleared once through pyOCD (`RCC_BDCR.BDRST`) before this first boot, so
+the transcript starts from an empty domain and writes the configured default.
+The image is sha256 `2882f034…` (BIN), build tag `c963821`:
+
+```text
+rtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=c963821
+rtos: time 2026-01-01 00:00:00 UTC epoch=1767225600 src=lse boot=1 first=1 local=2026-01-01 08:00:00 +0800
+rtos: kernel ready tick=1000Hz
+[   0.000] rtos: runner start cases=1 build=c963821
+[   0.005] rtos: case rtc start
+[   0.009] rtc: init rc=0 src=lse lse=1 lsi=0 boot=1 configured=0 owned=0
+[   0.018] rtc: regs bdcr=00008103 csr=0e000000 cr=00000000 tr=00000000 dr=00268101 isr=00000037 prer=007f00ff
+[   0.030] rtc: entry 2026-01-01 00:00:00 UTC epoch=1767225600 wday=4 local=2026-01-01 08:00:00 +0800
+[   0.040] rtc: persist boot=1 skip=first-boot
+[   2.177] rtc: set 2026-01-02 03:04:05 UTC epoch=1767323045 want=1767323045 wday=5 rc=0
+[   2.186] rtc: readback 2026-01-02 03:04:05 UTC epoch=1767323045 wday=5 ok=1
+[   2.194] rtc: convert cases=8 fail=0
+[   4.398] rtc: advance t0=1767323045 t1=1767323047 delta=2 ok=1
+[   4.405] rtc: posix time=1767323047 epoch=1767323047 ok=1
+[   4.410] rtc: PASS
+[   4.413] rtos: case rtc PASS
+[   4.416] rtos: result pass cases=1/1 backend=freertos
+```
+
+The `set` line is at 2.177 s, not at 0.05 s, because this set changes the
+date: the date register latches at the next calendar update, so the driver
+writes it, waits for the date fields (the first attempt times out at 1.5 s),
+and the case's retry writes the time once the date is in place.  A set whose
+date is already current returns in about 10 ms (the pin-reset boot's line is
+at `[   0.049]`).
+
+The next reset is a pyOCD `SYSRESETREQ`, with no reflash.  The RTC domain and
+the calendar survive it, and the boot counter is the witness:
+
+```text
+rtos: time 2026-01-02 03:04:42 UTC epoch=1767323082 src=lse boot=2 first=0 local=2026-01-02 11:04:42 +0800
+[   0.009] rtc: init rc=0 src=lse lse=1 lsi=0 boot=2 configured=1 owned=0
+[   0.040] rtc: persist boot=2 last=1767323045 now=1767323082 dt=37 ok=1
+[   0.049] rtc: set 2026-01-02 03:04:05 UTC epoch=1767323045 want=1767323045 wday=5 rc=0
+[   0.059] rtc: readback 2026-01-02 03:04:05 UTC epoch=1767323045 wday=5 ok=1
+[   0.066] rtc: convert cases=8 fail=0
+[   0.175] rtc: advance t0=1767323045 t1=1767323047 delta=2 ok=1
+[   0.175] rtc: posix time=1767323047 epoch=1767323047 ok=1
+[   0.175] rtc: PASS
+```
+
+The third boot is a relay cold boot of the same image, no reflash.  The CR1220
+is fitted, so the calendar and the counter survive the power cut too:
+
+```text
+rtos: time 2026-01-02 03:04:36 UTC epoch=1767323076 src=lse boot=3 first=0 local=2026-01-02 11:04:36 +0800
+[   0.009] rtc: init rc=0 src=lse lse=1 lsi=0 boot=3 configured=1 owned=0
+[   0.040] rtc: persist boot=3 last=1767323045 now=1767323076 dt=31 ok=1
+```
+
+What the transcripts prove: the LSE runs and the prescaler is 127/255; the
+RTC domain's magic and boot counter survive a pin reset and a battery-backed
+cold boot; the date/epoch conversion is exact against the case's eight rows;
+the set/readback pair is exact; the second counter moves at 1 Hz; and
+newlib's `time()` agrees with the service.
+
+What they do not prove: accuracy against a reference clock (the LSE is a
+crystal; no ppm measurement was made), the LSI fallback's accuracy, behaviour
+without the CR1220 (boot 3 would be a first boot and still pass), SNTP/FAT/
+alarm/sub-second use, or the 2038 limit of 32-bit `time_t`.  The date-latch
+poll's first attempt can time out on a date change; the case's retry is part
+of the designed path, not an observed defect of this image.
