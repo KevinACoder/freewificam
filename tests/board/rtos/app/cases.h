@@ -113,6 +113,11 @@ int case_f429_ap_link_run(void);
 int case_f429_eth_run(void);
 #endif
 
+/* The battery-backed calendar and the system date/time service. */
+#if defined(RTOS_CASE_RTC)
+int case_rtc_run(void);
+#endif
+
 /* The AP6181 (BCM43362) WICED line: one case per rung of the ladder.  The
  * driver is not the Linux stack, so these cases do not include any linuxkpi
  * header; their anchors are the four PASS lines. */

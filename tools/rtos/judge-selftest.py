@@ -855,6 +855,71 @@ def f429_eth_no_link() -> str:
             + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
 
 
+RTC_BODY = (
+    "rtos: case rtc start\n"
+    "rtc: init rc=0 src=lse lse=1 lsi=0 boot=1 configured=0\n"
+    "rtc: regs bdcr=00008103 csr=0c000000 cr=00000000 tr=00000000 "
+    "dr=00000000 isr=00000020 prer=007f00ff\n"
+    "rtc: entry 2026-01-01 00:00:00 UTC epoch=1767225600 wday=4 "
+    "local=2026-01-01 08:00:00 +0800\n"
+    "rtc: persist boot=1 skip=first-boot\n"
+    "rtc: set 2026-01-02 03:04:05 UTC epoch=1767323045 want=1767323045 "
+    "wday=5 rc=0\n"
+    "rtc: readback 2026-01-02 03:04:05 UTC epoch=1767323045 wday=5 ok=1\n"
+    "rtc: convert cases=8 fail=0\n"
+    "rtc: advance t0=1767323045 t1=1767323047 delta=2 ok=1\n"
+    "rtc: posix time=1767323047 epoch=1767323047 ok=1\n"
+)
+
+
+def rtc_finish(body: str) -> str:
+    return (BANNER + body + "rtc: PASS\n"
+            + CASE_PASS.format(name="rtc") + RESULT_PASS)
+
+
+def rtc_open() -> str:
+    return rtc_finish(RTC_BODY)
+
+
+def rtc_lsi() -> str:
+    body = (RTC_BODY
+            .replace("src=lse lse=1", "src=lsi lse=0")
+            .replace("bdcr=00008103", "bdcr=00008203")
+            .replace("prer=007f00ff", "prer=007f00f9"))
+    return rtc_finish(body)
+
+
+def rtc_set_mismatch() -> str:
+    body = RTC_BODY.replace(
+        "rtc: readback 2026-01-02 03:04:05 UTC epoch=1767323045 wday=5 ok=1",
+        "rtc: readback 2026-01-02 03:04:06 UTC epoch=1767323046 wday=5 ok=1")
+    return rtc_finish(body)
+
+
+def rtc_no_advance() -> str:
+    body = RTC_BODY.replace(
+        "rtc: advance t0=1767323045 t1=1767323047 delta=2 ok=1",
+        "rtc: advance t0=1767323045 t1=1767323045 delta=0 ok=0")
+    return rtc_finish(body)
+
+
+def rtc_persist_ok() -> str:
+    body = (RTC_BODY
+            .replace("boot=1 configured=0", "boot=2 configured=1")
+            .replace("rtc: persist boot=1 skip=first-boot",
+                     "rtc: persist boot=2 last=1767323045 now=1767323053 "
+                     "dt=8 ok=1"))
+    return rtc_finish(body)
+
+
+def rtc_persist_lost() -> str:
+    body = (RTC_BODY
+            .replace("boot=1 configured=0", "boot=2 configured=1")
+            .replace("rtc: persist boot=1 skip=first-boot",
+                     "rtc: persist boot=2 skip=first-boot"))
+    return rtc_finish(body)
+
+
 SAMPLES = [
     ("usb-dwc2-open", usb_dwc2_open, None,
      {"cases": ["tick", "usb_dwc2"]}),
@@ -957,6 +1022,17 @@ SAMPLES = [
      {"cases": ["f429_eth"]}),
     ("f429-eth-no-link", f429_eth_no_link, "link speed=0",
      {"cases": ["f429_eth"]}),
+    ("rtc-open", rtc_open, None, {"cases": ["rtc"]}),
+    ("rtc-lsi-source", rtc_lsi, "not the board's LSE",
+     {"cases": ["rtc"]}),
+    ("rtc-set-mismatch", rtc_set_mismatch, "readback",
+     {"cases": ["rtc"]}),
+    ("rtc-no-advance", rtc_no_advance, "advance delta=0",
+     {"cases": ["rtc"]}),
+    ("rtc-persist-ok", rtc_persist_ok, None,
+     {"cases": ["rtc"], "rtc_boot_min": "2", "rtc_persist": "required"}),
+    ("rtc-persist-lost", rtc_persist_lost, "persistence was required",
+     {"cases": ["rtc"], "rtc_boot_min": "2", "rtc_persist": "required"}),
 ]
 
 

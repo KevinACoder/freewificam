@@ -26,6 +26,9 @@
 #include "cases.h"
 #include "clock.h"
 #include "runner.h"
+#if defined(CONFIG_F429_RTC)
+#include "rtos_time.h"
+#endif
 #if defined(CONFIG_F429_SDRAM)
 #include "fmc_sdram.h"
 #endif
@@ -134,6 +137,62 @@ static int watchdog_start(void)
 }
 #endif
 
+#if defined(CONFIG_F429_RTC)
+static void put_u32_dec(uint32_t value)
+{
+	char buf[11];
+	int i = 0;
+
+	if (value == 0U) {
+		uart_early_putc('0');
+		return;
+	}
+	while (value != 0U && i < (int)sizeof(buf)) {
+		buf[i++] = (char)('0' + (value % 10U));
+		value /= 10U;
+	}
+	while (i > 0) {
+		uart_early_putc(buf[--i]);
+	}
+}
+
+/*
+ * One line after the banner: the system date/time this image will use.  It is
+ * the only boot-time consumer of the clock, so a missing RTC is reported here
+ * rather than becoming a fatal: the image still runs, and the acceptance case
+ * names the failure.
+ */
+static void print_boot_time(void)
+{
+	struct rtos_time_info info;
+	char utc[24] = "";
+	char local[32] = "";
+
+	if (rtos_time_init() != 0) {
+		uart_early_puts("rtos: time unavailable\n");
+		return;
+	}
+
+	(void)rtos_time_info_get(&info);
+	(void)rtos_time_format_utc(utc, sizeof(utc));
+	(void)rtos_time_format_local(local, sizeof(local));
+
+	uart_early_puts("rtos: time ");
+	uart_early_puts(utc);
+	uart_early_puts(" UTC epoch=");
+	put_u32_dec(rtos_time_epoch());
+	uart_early_puts(" src=");
+	uart_early_puts(rtos_time_source_name(info.source));
+	uart_early_puts(" boot=");
+	put_u32_dec(info.boot_count);
+	uart_early_puts(" first=");
+	uart_early_putc((info.first_boot != 0) ? '1' : '0');
+	uart_early_puts(" local=");
+	uart_early_puts(local);
+	uart_early_putc('\n');
+}
+#endif /* CONFIG_F429_RTC */
+
 int main(void)
 {
 	uart_early_init();
@@ -142,6 +201,10 @@ int main(void)
 	uart_early_puts("rtos: banner backend=" RTOS_BACKEND_NAME
 			" kernel=" RTOS_KERNEL_NAME
 			" build=" FW_BUILD_TAG "\n");
+
+#if defined(CONFIG_F429_RTC)
+	print_boot_time();
+#endif
 
 #if defined(CONFIG_F429_SDRAM)
 	/* The core board's 32 MB FMC SDRAM.  The wireless profiles place the

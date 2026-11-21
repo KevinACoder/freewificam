@@ -18,6 +18,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # The camera image's cases.  They are parsed in addition to the default CASES
@@ -143,6 +144,11 @@ CASES = (
     # lease and the internet echo.  Its evidence block below checks the PHY
     # identity, the link, the lease and at least one public reply.
     "f429_eth",
+    # The same board's battery-backed calendar and system date/time.  The
+    # evidence block checks the LSE source, the prescaler, the date<->epoch
+    # arithmetic against Python's datetime, the set/readback pair and the
+    # persistence criterion the run asks for.
+    "rtc",
     "pi_stream",
 )
 
@@ -1880,6 +1886,53 @@ PATTERNS = {
     "pi_stream_pass_av": re.compile(r"stream: PASS AV", re.MULTILINE),
     "pi_stream_fail": re.compile(
         r"stream: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # The F429 RTC calendar and the system date/time service.  The case prints
+    # one line per rung; the judge checks the driver's own register evidence,
+    # the date<->epoch arithmetic (Python's datetime is the independent side)
+    # and the persistence criterion the run asks for.
+    "rtc_init": re.compile(
+        r"rtc: init rc=(?P<rc>-?\d+) src=(?P<src>\w+) lse=(?P<lse>[01]) "
+        r"lsi=(?P<lsi>[01]) boot=(?P<boot>\d+) configured=(?P<configured>[01])",
+        re.MULTILINE,
+    ),
+    "rtc_regs": re.compile(
+        r"rtc: regs bdcr=(?P<bdcr>[0-9a-f]+) csr=(?P<csr>[0-9a-f]+) "
+        r"cr=(?P<cr>[0-9a-f]+) tr=(?P<tr>[0-9a-f]+) dr=(?P<dr>[0-9a-f]+) "
+        r"isr=(?P<isr>[0-9a-f]+) prer=(?P<prer>[0-9a-f]+)", re.MULTILINE
+    ),
+    "rtc_entry": re.compile(
+        r"rtc: entry (?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC "
+        r"epoch=(?P<epoch>\d+) wday=(?P<wday>\d) local=(?P<local>[^\n]+)",
+        re.MULTILINE,
+    ),
+    "rtc_persist": re.compile(
+        r"rtc: persist boot=(?P<boot>\d+)(?: last=(?P<last>\d+) "
+        r"now=(?P<now>\d+) dt=(?P<dt>-?\d+) ok=(?P<ok>[01]))?"
+        r"(?: skip=(?P<skip>\w+))?", re.MULTILINE
+    ),
+    "rtc_set": re.compile(
+        r"rtc: set (?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC "
+        r"epoch=(?P<epoch>\d+) want=(?P<want>\d+) wday=(?P<wday>\d) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtc_readback": re.compile(
+        r"rtc: readback (?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC "
+        r"epoch=(?P<epoch>\d+) wday=(?P<wday>\d) ok=(?P<ok>[01])",
+        re.MULTILINE,
+    ),
+    "rtc_convert": re.compile(
+        r"rtc: convert cases=(?P<cases>\d+) fail=(?P<fail>\d+)", re.MULTILINE
+    ),
+    "rtc_advance": re.compile(
+        r"rtc: advance t0=(?P<t0>\d+) t1=(?P<t1>\d+) delta=(?P<delta>-?\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtc_posix": re.compile(
+        r"rtc: posix (?:time=(?P<time>-?\d+) epoch=(?P<epoch>\d+) "
+        r"ok=(?P<ok>[01])|skip=(?P<skip>\w+))", re.MULTILINE
+    ),
+    "rtc_pass": re.compile(r"rtc: PASS", re.MULTILINE),
+    "rtc_fail": re.compile(r"rtc: FAIL reason=(?P<reason>\w+)", re.MULTILINE),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -2503,6 +2556,20 @@ def parse(text: str) -> dict:
         for case in CASES + UVC_CASES + UAC_CASES
     }
     return found
+
+
+def _utc_date_epoch(date: str) -> tuple[int, int] | None:
+    """The independent side of the RTC arithmetic: date -> (epoch, ISO wday).
+
+    Python's datetime is a second implementation of the same conversion, so a
+    case that agrees with itself but not with the calendar fails here.
+    """
+    try:
+        moment = datetime.strptime(date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(moment.timestamp()), moment.isoweekday()
 
 
 def judge(text: str, expect: dict | None = None) -> dict:
@@ -6308,6 +6375,178 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"f429_eth: driver rx={stats['rx']} tx={stats['tx']} "
                 f"len_err={stats['len']} copy_err={stats['copy']} "
                 f"missed={stats['missed']}")
+
+    if cases.get("rtc", {}).get("verdict") == "pass":
+        init = found["rtc_init"]
+        if not init:
+            errors.append("rtc: PASS without an init line")
+        else:
+            if int(init["rc"]) != 0:
+                errors.append(f"rtc: init rc={init['rc']}")
+            if init["src"] != "lse" or init["lse"] != "1":
+                errors.append(
+                    f"rtc: source src={init['src']} lse={init['lse']} "
+                    "is not the board's LSE")
+            else:
+                notes.append(
+                    f"rtc: source lse boot={init['boot']} "
+                    f"configured={init['configured']}")
+            min_boot = int(expect.get("rtc_boot_min", 1))
+            if int(init["boot"]) < min_boot:
+                errors.append(
+                    f"rtc: boot counter {init['boot']} < {min_boot} "
+                    "(the backup domain did not survive the reset)")
+
+        regs = found["rtc_regs"]
+        if not regs:
+            errors.append("rtc: PASS without the register line")
+        else:
+            bdcr = int(regs["bdcr"], 16)
+            prer = int(regs["prer"], 16)
+            regs_ok = True
+            if (bdcr & 0x300) != 0x100:
+                errors.append(
+                    f"rtc: RCC_BDCR RTCSEL is not LSE ({regs['bdcr']})")
+                regs_ok = False
+            if (bdcr & 0x8000) == 0:
+                errors.append(f"rtc: RTCEN is off ({regs['bdcr']})")
+                regs_ok = False
+            if (bdcr & 0x2) == 0:
+                errors.append(f"rtc: LSERDY is off ({regs['bdcr']})")
+                regs_ok = False
+            if ((prer >> 16) & 0x7F) != 127 or (prer & 0x7FFF) != 255:
+                errors.append(
+                    f"rtc: prescaler {regs['prer']} is not 127/255 "
+                    "for the 32.768 kHz LSE")
+                regs_ok = False
+            if regs_ok:
+                notes.append("rtc: LSE selected, prescaler 127/255")
+
+        entry = found["rtc_entry"]
+        if not entry:
+            errors.append("rtc: PASS without the entry line")
+        else:
+            parsed = _utc_date_epoch(entry["date"])
+            if parsed is None:
+                errors.append(f"rtc: entry date {entry['date']} is invalid")
+            else:
+                epoch, wday = parsed
+                if epoch != int(entry["epoch"]) or wday != int(entry["wday"]):
+                    errors.append(
+                        f"rtc: entry {entry['date']} epoch={entry['epoch']} "
+                        f"wday={entry['wday']} disagrees with UTC")
+                elif epoch < 946684800 or epoch > 4102444799:
+                    errors.append(
+                        f"rtc: entry epoch {epoch} outside the RTC range")
+                else:
+                    notes.append(f"rtc: entry {entry['date']} UTC")
+
+        persist = found["rtc_persist"]
+        if not persist:
+            errors.append("rtc: PASS without the persist line")
+        else:
+            need = expect.get("rtc_persist", "optional")
+            if need == "required":
+                if persist.get("ok") != "1":
+                    errors.append(
+                        "rtc: persistence was required but the boot did not "
+                        "prove it")
+                elif not 0 <= int(persist["dt"]) <= 600:
+                    errors.append(
+                        f"rtc: persist dt={persist['dt']} outside 0..600 s")
+                else:
+                    notes.append(
+                        f"rtc: persisted across the reset, dt={persist['dt']} s")
+            elif persist.get("skip"):
+                notes.append(f"rtc: persist skipped ({persist['skip']})")
+            elif persist.get("ok") == "0":
+                notes.append(
+                    f"rtc: persist not proven (dt={persist.get('dt')})")
+
+        setline = found["rtc_set"]
+        readback = found["rtc_readback"]
+        if not setline or not readback:
+            errors.append("rtc: PASS without the set/readback pair")
+        else:
+            pair_ok = True
+            parsed = _utc_date_epoch(setline["date"])
+            if parsed is None:
+                errors.append(f"rtc: set date {setline['date']} is invalid")
+                pair_ok = False
+            else:
+                set_epoch, set_wday = parsed
+                if set_epoch != int(setline["epoch"]):
+                    errors.append(
+                        f"rtc: set {setline['date']} "
+                        f"epoch={setline['epoch']} disagrees with UTC")
+                    pair_ok = False
+                if set_wday != int(setline["wday"]):
+                    errors.append(
+                        f"rtc: set wday={setline['wday']} != {set_wday}")
+                    pair_ok = False
+            if int(setline["rc"]) != 0:
+                errors.append(f"rtc: set rc={setline['rc']}")
+                pair_ok = False
+            if int(setline["epoch"]) != int(setline["want"]):
+                errors.append(
+                    f"rtc: set epoch={setline['epoch']} "
+                    f"want={setline['want']}")
+                pair_ok = False
+            if readback["ok"] != "1":
+                errors.append("rtc: readback ok=0")
+                pair_ok = False
+            if readback["date"] != setline["date"]:
+                errors.append(
+                    f"rtc: readback {readback['date']} != "
+                    f"set {setline['date']}")
+                pair_ok = False
+            if int(readback["epoch"]) != int(setline["epoch"]):
+                errors.append(
+                    f"rtc: readback epoch={readback['epoch']} != "
+                    f"set {setline['epoch']}")
+                pair_ok = False
+            if readback["wday"] != setline["wday"]:
+                errors.append(
+                    f"rtc: readback wday={readback['wday']} != "
+                    f"set {setline['wday']}")
+                pair_ok = False
+            if pair_ok:
+                notes.append(f"rtc: set/readback {setline['date']} UTC")
+
+        conv = found["rtc_convert"]
+        if not conv:
+            errors.append("rtc: PASS without the convert line")
+        elif int(conv["fail"]) != 0 or int(conv["cases"]) < 8:
+            errors.append(
+                f"rtc: convert {conv['cases']} cases, {conv['fail']} failed")
+
+        adv = found["rtc_advance"]
+        if not adv:
+            errors.append("rtc: PASS without the advance line")
+        else:
+            delta = int(adv["delta"])
+            if adv["ok"] != "1" or delta < 2 or delta > 3:
+                errors.append(f"rtc: advance delta={delta} ok={adv['ok']}")
+            elif int(adv["t1"]) - int(adv["t0"]) != delta:
+                errors.append("rtc: advance t0/t1 disagree with delta")
+            else:
+                notes.append(
+                    f"rtc: second counter advanced {delta} s in 2.2 s")
+
+        posix = found["rtc_posix"]
+        if not posix:
+            errors.append("rtc: PASS without the posix line")
+        elif posix.get("skip"):
+            notes.append(f"rtc: posix skipped ({posix['skip']})")
+        elif posix.get("ok") != "1":
+            errors.append(
+                f"rtc: time()={posix.get('time')} vs "
+                f"epoch={posix.get('epoch')}")
+        else:
+            notes.append("rtc: time() agrees with the system clock")
+
+        if not found["rtc_pass"]:
+            errors.append("rtc: the PASS line is missing")
 
     if cases.get("pi_stream", {}).get("verdict") == "pass":
         # The stage-4 arm: video and audio both reached the Pi.  The window

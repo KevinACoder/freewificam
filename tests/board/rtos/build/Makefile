@@ -347,6 +347,16 @@ ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
 
+# The RTC case reads the board calendar through the first-party driver; a
+# profile that names the case without the clock would build a case with no
+# source.  The board driver itself is gated by the same Kconfig symbol in
+# platform/board/sources.mk.
+ifneq ($(filter rtc,$(CASES)),)
+ifneq ($(CONFIG_F429_RTC),1)
+$(error the rtc case requires CONFIG_F429_RTC=y)
+endif
+endif
+
 # The liblinux80211 world (empty unless the component is selected).
 ifeq ($(CONFIG_LIBLINUX80211),1)
 include $(CURDIR)/kpi.mk
@@ -602,6 +612,12 @@ APP_SRCS := \
 	$(APP_CLOCK_SRC) \
 	$(CASE_SRCS)
 
+# The system wall clock: the app half of the RTC image.  It is the only app
+# source that sees both the board calendar and newlib's time() seam.
+ifeq ($(CONFIG_F429_RTC),1)
+APP_SRCS += $(LINE)/app/rtos_time.c
+endif
+
 # The PCIe domain's source groups live in platform/{arch,board}/sources.mk;
 # these names are the flag-world handles the link order uses.
 PCIE_BOARD_SRCS := $(BOARD_PCIE_SRCS)
@@ -705,6 +721,18 @@ ifneq ($(filter usb_xhci usb_ehci usb_dwc2 f429_sdram,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
 		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \
 	echo "PASS: usb msc class table present"
+endif
+ifneq ($(filter rtc,$(CASES)),)
+	@set -e; \
+	for s in rtc_board_init rtc_board_get rtos_time_epoch; do \
+		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" || \
+			{ echo "FAIL: $$s not in the rtc image"; exit 1; }; \
+	done; \
+	if [ "$(CONFIG_F429_RTC_POSIX_TIME)" = "1" ]; then \
+		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx _gettimeofday || \
+			{ echo "FAIL: _gettimeofday not in the rtc image"; exit 1; }; \
+	fi; \
+	echo "PASS: rtc driver and time service present"
 endif
 ifneq ($(strip $(UVC_CASES)),)
 	@set -e; \

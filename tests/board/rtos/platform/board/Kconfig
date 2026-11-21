@@ -79,6 +79,70 @@ config F429_TICK_PC
 	  lock): a wedged loop with interrupts on keeps naming its PC, a loop
 	  with interrupts masked stops printing.  Diagnostic only.
 
+# --- STM32F429 RTC and the system wall clock (2026-11-21) -------------------
+#
+# The core board carries a 32.768 kHz crystal on OSC32_IN/OSC32_OUT and the
+# base board a CR1220 holder on VBAT, so the RTC is the one clock that survives
+# a power cut when the battery is fitted.  The driver is first-party register
+# code; the system time service on top of it is app/rtos_time.c.  Off by
+# default: the image prints one "rtos: time ..." line and links the service
+# only when a profile asks for a wall clock.
+
+config F429_RTC
+	bool "STM32F429 RTC + system date/time"
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  Brings the RTC up from main() (LSE 32.768 kHz first, LSI fallback),
+	  keeps the calendar in UTC and exposes it through rtos_time_*: epoch,
+	  calendar, UTC/local formatting and, when F429_RTC_POSIX_TIME is set,
+	  newlib's time()/gettimeofday().  A backup-domain magic distinguishes
+	  an already-configured calendar from a fresh one; only the latter is
+	  initialised.  On this profile the boot banner is followed by one
+	  "rtos: time YYYY-MM-DD HH:MM:SS UTC ..." line.
+
+config F429_RTC_DEFAULT_EPOCH
+	int "First-boot RTC default epoch (seconds since 1970-01-01 UTC)"
+	depends on F429_RTC
+	default 1767225600
+	range 946684800 2147483647
+	help
+	  2026-01-01 00:00:00 UTC.  Written only when the backup domain has no
+	  marker or an invalid calendar.  The Kconfig upper bound is the
+	  signed-32-bit limit; rtos_time_* itself accepts epochs through
+	  2099-12-31, and newlib's 32-bit time_t ends in 2038.
+
+config F429_RTC_TZ_OFFSET_MIN
+	int "Local time offset from UTC (minutes)"
+	depends on F429_RTC
+	default 480
+	range -720 840
+	help
+	  Fixed offset used by rtos_time_get_tm(..., local=1) and the local
+	  formatter; no daylight saving.  480 is UTC+08:00.
+
+config F429_RTC_POSIX_TIME
+	bool "Provide newlib _gettimeofday so time() reads the RTC"
+	depends on F429_RTC
+	default y
+	help
+	  Defines the _gettimeofday syscall seam, which makes newlib's time()
+	  and gettimeofday() return the RTC calendar (seconds resolution).
+	  Turn off for an image that must not pull newlib's time path.
+
+config F429_RTC_TAKE_OWNERSHIP
+	bool "Reset a foreign backup domain so this firmware can choose LSE"
+	depends on F429_RTC
+	default y
+	help
+	  The back up domain can carry a calendar this firmware did not write
+	  (the bench board's factory demo left one on LSI with the vendor
+	  example's magic).  RTCSEL can only be changed by resetting the
+	  backup domain, so with this on the first boot takes ownership:
+	  the foreign calendar is discarded, LSE is selected and the new
+	  magic is written.  Off preserves the foreign calendar and its
+	  source; the acceptance gate then reports a non-LSE source instead
+	  of passing.  A calendar this firmware wrote is never reset.
+
 config F429_WIFI_TP
 	bool "F429 wifi: run the throughput phases after the data plane pings"
 	depends on F429_WIFI_STAGE = 6

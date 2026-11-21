@@ -103,6 +103,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_F429_ETH)
 	CASE_ENTRY("f429_eth", case_f429_eth_run)
 #endif
+#if defined(RTOS_CASE_RTC)
+	CASE_ENTRY("rtc", case_rtc_run)
+#endif
 #if defined(RTOS_CASE_AP6181_ATTACH)
 	CASE_ENTRY("ap6181_attach", case_f429_ap6181_attach_run)
 #endif

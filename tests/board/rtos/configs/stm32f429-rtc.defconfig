@@ -1,0 +1,20 @@
+# F429 RTC: the board's battery-backed calendar and the system date/time.
+#
+# Hardware: core board V2.1 Y2 32.768 kHz on OSC32_IN/OSC32_OUT; base board
+# V2.0 CR1220 holder on VBAT.  LSE is the intended source, LSI the fallback.
+# The profile carries only the `rtc` case: main() prints one `rtos: time ...`
+# line and the case exercises the driver, the time service and newlib's
+# time() seam.  Acceptance: two relay cold boots plus one pin-reset boot, the
+# latter proving the backup domain kept the calendar.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_RTC=y
+CONFIG_F429_RTC_DEFAULT_EPOCH=1767225600
+CONFIG_F429_RTC_TZ_OFFSET_MIN=480
+CONFIG_F429_RTC_POSIX_TIME=y
+CONFIG_CASES="rtc"

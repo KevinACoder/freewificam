@@ -26,6 +26,11 @@ obj-$(CONFIG_BOARD_STM32F429_CHALLENGER) += \
 	stm32f429-challenger/uart.c \
 	stm32f429-challenger/reset.c \
 	stm32f429-challenger/fmc_sdram.c
+
+# The board's battery-backed calendar.  Only a profile that carries the system
+# wall clock compiles it; the other F429 images keep the backup domain off the
+# bus and their image unchanged.
+obj-$(CONFIG_F429_RTC) += stm32f429-challenger/rtc.c
 endif
 
 ifeq ($(SRC_TAG),pcie)
